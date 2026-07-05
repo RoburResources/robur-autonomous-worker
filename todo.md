@@ -25,4 +25,4 @@
 - [x] Write vitest tests for core logic
 - [ ] Create heartbeat cron jobs after deployment
 - [x] Enforce daily API spend tracking against $50 cap in executor
-- [ ] Add full goal editing UI (edit text, priority, sub-goals for existing goals)
+- [x] Add full goal editing UI (edit text, priority, sub-goals for existing goals)

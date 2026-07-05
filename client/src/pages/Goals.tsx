@@ -40,6 +40,7 @@ export default function Goals() {
   const updateGoal = trpc.goals.update.useMutation();
   const [showAdd, setShowAdd] = useState(false);
   const [newGoal, setNewGoal] = useState({ goalText: "", priority: 5, subGoals: "" });
+  const [editingGoal, setEditingGoal] = useState<{ id: number; goalText: string; priority: number; subGoals: string } | null>(null);
 
   const handleCreate = async () => {
     if (!newGoal.goalText.trim()) return;
@@ -52,6 +53,28 @@ export default function Goals() {
     setNewGoal({ goalText: "", priority: 5, subGoals: "" });
     setShowAdd(false);
     refetch();
+  };
+
+  const handleEdit = async () => {
+    if (!editingGoal || !editingGoal.goalText.trim()) return;
+    await updateGoal.mutateAsync({
+      id: editingGoal.id,
+      goalText: editingGoal.goalText,
+      priority: editingGoal.priority,
+      subGoals: editingGoal.subGoals ? editingGoal.subGoals.split("\n").filter(Boolean) : undefined,
+    });
+    toast.success("Goal updated");
+    setEditingGoal(null);
+    refetch();
+  };
+
+  const startEdit = (goal: any) => {
+    let sgs = "";
+    try {
+      const arr = Array.isArray(goal.subGoals) ? goal.subGoals : JSON.parse(String(goal.subGoals || "[]"));
+      sgs = arr.join("\n");
+    } catch {}
+    setEditingGoal({ id: goal.id, goalText: goal.goalText, priority: goal.priority, subGoals: sgs });
   };
 
   const handleStatusChange = async (id: number, status: "active" | "paused" | "completed" | "archived") => {
@@ -133,6 +156,7 @@ export default function Goals() {
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <Badge variant="outline" className="font-mono">P{goal.priority}</Badge>
+                  <Button size="sm" variant="ghost" onClick={() => startEdit(goal)}>Edit</Button>
                   <Select
                     value={goal.status}
                     onValueChange={(v) => handleStatusChange(goal.id, v as any)}
@@ -153,6 +177,50 @@ export default function Goals() {
           </Card>
         ))}
       </div>
+
+      {/* Edit Goal Dialog */}
+      <Dialog open={!!editingGoal} onOpenChange={(open) => { if (!open) setEditingGoal(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Goal</DialogTitle>
+          </DialogHeader>
+          {editingGoal && (
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium">Goal Description</label>
+                <Textarea
+                  value={editingGoal.goalText}
+                  onChange={e => setEditingGoal(prev => prev ? { ...prev, goalText: e.target.value } : null)}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Priority (1-10)</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={editingGoal.priority}
+                  onChange={e => setEditingGoal(prev => prev ? { ...prev, priority: parseInt(e.target.value) || 5 } : null)}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium">Sub-goals (one per line)</label>
+                <Textarea
+                  value={editingGoal.subGoals}
+                  onChange={e => setEditingGoal(prev => prev ? { ...prev, subGoals: e.target.value } : null)}
+                  className="mt-1"
+                  rows={4}
+                />
+              </div>
+              <Button onClick={handleEdit} disabled={updateGoal.isPending} className="w-full">
+                Save Changes
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

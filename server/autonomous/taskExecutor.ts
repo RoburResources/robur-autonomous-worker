@@ -102,11 +102,10 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     });
 
     // Update daily metrics
-    const today = new Date().toISOString().split("T")[0];
     if (result.success) {
-      await upsertDailyMetrics(today, { tasksCompleted: 1 });
+      await upsertDailyMetrics(todayDate, { tasksCompleted: 1 });
     } else {
-      await upsertDailyMetrics(today, { tasksFailed: 1 });
+      await upsertDailyMetrics(todayDate, { tasksFailed: 1 });
     }
 
     return { executed: true, taskId: task.id };
