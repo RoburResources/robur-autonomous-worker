@@ -30,7 +30,45 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
       return { executed: false, error: "No pending tasks" };
     }
 
-    // Check approval gate for high-value tasks
+    // ═══ EXTERNAL CONTACT APPROVAL GATE (7-day restriction) ═══
+    // ALL outbound contact with real people requires Michael's SMS approval first.
+    // Only calls to Michael himself (+61495007200) are exempt.
+    const externalContactRequired = await getConfig("external_contact_approval_required");
+    const restrictionExpiry = await getConfig("external_contact_restriction_expiry");
+    const isRestrictionActive = externalContactRequired === "true" && 
+      (!restrictionExpiry || new Date(restrictionExpiry) > new Date());
+
+    if (isRestrictionActive) {
+      const contactActions = ["outbound_call", "send_email", "send_sms"];
+      if (contactActions.includes(task.actionType || "")) {
+        // Check if this is a call to Michael (exempt)
+        const taskMeta = task.metadata as any;
+        const isMichaelCall = taskMeta?.is_michael === true || 
+          taskMeta?.target_number === "+61495007200" ||
+          taskMeta?.skip_approval === true;
+
+        if (!isMichaelCall) {
+          // Requires SMS approval before contacting external person
+          await updateTask(task.id, { status: "awaiting_approval" });
+          const userPhone = await getConfig("user_phone") || "+61495007200";
+          const actionLabel = task.actionType === "outbound_call" ? "CALL" : 
+                             task.actionType === "send_email" ? "EMAIL" : "SMS";
+          await sendSMS(
+            userPhone,
+            `[Robur AI] APPROVAL REQUIRED to ${actionLabel}: "${task.description.substring(0, 120)}" Reply APPROVE or REJECT. Task #${task.id}`
+          );
+          await logExecution({
+            taskId: task.id,
+            actionType: "external_contact_approval_request",
+            details: { actionType: task.actionType, description: task.description, reason: "7-day external contact restriction active" },
+            outcome: "pending",
+          });
+          return { executed: false, taskId: task.id, error: "Awaiting approval - external contact restriction active" };
+        }
+      }
+    }
+
+    // Check approval gate for high-value tasks (always active regardless of restriction)
     const approvalThreshold = parseInt(await getConfig("approval_threshold_cents") || "50000");
     const estimatedValue = parseFloat(task.estimatedValue as string || "0") * 100; // convert to cents
     if (estimatedValue > approvalThreshold) {

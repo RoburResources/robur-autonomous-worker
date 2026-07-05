@@ -26,3 +26,7 @@
 - [x] Create heartbeat cron jobs after deployment (6 jobs registered and active)
 - [x] Enforce daily API spend tracking against $50 cap in executor
 - [x] Add full goal editing UI (edit text, priority, sub-goals for existing goals)
+- [x] CRITICAL: All external human contact requires SMS approval first (7-day restriction until 2026-07-12)
+- [x] Update task executor to gate outbound_call/send_email/send_sms with approval request
+- [x] Store restriction rule in system_config with expiry date
+- [x] Create task for Addison to call Michael back re: voice issues discussed
