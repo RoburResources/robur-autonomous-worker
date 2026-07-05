@@ -23,6 +23,6 @@
 - [x] Register all cron handlers in server/_core/index.ts
 - [x] Configure secrets (RETELL_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER)
 - [x] Write vitest tests for core logic
-- [ ] Create heartbeat cron jobs after deployment
+- [x] Create heartbeat cron jobs after deployment (6 jobs registered and active)
 - [x] Enforce daily API spend tracking against $50 cap in executor
 - [x] Add full goal editing UI (edit text, priority, sub-goals for existing goals)
