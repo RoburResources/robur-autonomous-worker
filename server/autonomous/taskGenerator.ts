@@ -1,5 +1,5 @@
 import { invokeLLM } from "../_core/llm";
-import { getActiveGoals, createTask, getConfig, isKillSwitchActive, getRecentTasks, logExecution } from "../db";
+import { getActiveGoals, createTask, getConfig, getAllConfig, isKillSwitchActive, getRecentTasks, logExecution } from "../db";
 
 /**
  * Task Generator — runs hourly
@@ -24,6 +24,12 @@ export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?
 
     const model = (await getConfig("task_generation_model")) || "gpt-5-mini";
 
+    // Load constitution context for LLM
+    const constitution = await getConfig("constitution_principles") || "";
+    const safetyRules = await getConfig("constitution_safety_rules") || "";
+    const scrapStrategy = await getConfig("scrap_metal_strategy") || "";
+    const topStrategies = await getConfig("top_20_strategies") || "";
+
     // Build goal context
     const goalsContext = activeGoals.map(g => 
       `Goal (priority ${g.priority}): ${g.goalText}\nSub-goals: ${JSON.stringify(g.subGoals || [])}`
@@ -34,22 +40,34 @@ export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?
       messages: [
         {
           role: "system",
-          content: `You are an autonomous business operations AI for Robur Resources, a scrap metal collection and recycling company in Perth, Western Australia.
+          content: `You are the autonomous business operations AI for Robur Resources (ABN 62 699 058 001), a scrap metal collection and recycling company in Perth, Western Australia. Owner: Michael T (Tarz), +61 495 007 200.
+
+OPERATING PRINCIPLES:
+${constitution}
+
+SAFETY RULES:
+${safetyRules}
+
+STRATEGIC CONTEXT:
+${scrapStrategy}
+
+TOP STRATEGIES:
+${topStrategies}
 
 Your job is to generate specific, actionable tasks that advance the company's goals. Each task should be executable by an AI agent with access to: phone calls (via Addison voice agent), email, SMS, and web research.
 
-Key customers (supply scrap): Pinwreck, Zenon Recycle, Owens for Scrap, Shine Auto Parts
-Key buyers (sell to): Allied Metal, CD Dodds, Sims Metal
-Location: Perth, Western Australia
+Key suppliers: Pinwreck (Kenwick - Tyre Wire), Zenon Recycle (Canning Vale - Tyre Wire), Owens For Scrap (Neerabup - HMS), Shine Auto Parts (Kenwick)
+Key buyers: Allied Metal (HMS $330/t, Tyre Wire $125/t), CD Dodd (Forrestfield), Sims Metal (Malaga)
+Export targets: Reliance Scrap Trading, Point Global Commodities, Moinuddin Corporation (Bangladesh - USD $450/MT CFR)
 
 Generate 3-5 NEW tasks. Each task must have:
-- description: A clear, specific action (not vague)
+- description: A clear, specific action (not vague) with contact details where applicable
 - actionType: one of "outbound_call", "send_email", "send_sms", "web_research", "data_entry"
 - priorityScore: 1-100 (higher = more urgent/valuable)
 - estimatedValue: estimated dollar value if successful (0 if not applicable)
 - goalId: which goal this advances (use the goal ID number)
 
-Respond in JSON format with an array of task objects.`
+Prioritize revenue-generating actions. Never fabricate contact details or prices. Respond in JSON format with an array of task objects.`
         },
         {
           role: "user",
