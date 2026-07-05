@@ -9,6 +9,17 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
+// Scheduled handlers
+import {
+  taskGeneratorHandler,
+  taskExecutorHandler,
+  evaluatorHandler,
+  selfImproverHandler,
+  morningBriefingHandler,
+  eveningBriefingHandler,
+} from "../scheduled/handlers";
+import { smsWebhookHandler } from "../scheduled/smsWebhook";
+
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
     const server = net.createServer();
@@ -36,6 +47,24 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+
+  // ─── Scheduled Cron Endpoints ─────────────────────────────────────────────
+  // These MUST be mounted before the Vite/static fallthrough
+  app.post("/api/scheduled/task-generator", taskGeneratorHandler);
+  app.post("/api/scheduled/task-executor", taskExecutorHandler);
+  app.post("/api/scheduled/evaluator", evaluatorHandler);
+  app.post("/api/scheduled/self-improver", selfImproverHandler);
+  app.post("/api/scheduled/morning-briefing", morningBriefingHandler);
+  app.post("/api/scheduled/evening-briefing", eveningBriefingHandler);
+
+  // ─── Webhooks ─────────────────────────────────────────────────────────────
+  app.post("/api/webhooks/sms", smsWebhookHandler);
+
+  // ─── Health Check ─────────────────────────────────────────────────────────
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString(), service: "robur-autonomous-worker" });
+  });
+
   // tRPC API
   app.use(
     "/api/trpc",

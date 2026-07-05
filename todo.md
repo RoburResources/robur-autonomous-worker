@@ -1,0 +1,28 @@
+# Project TODO
+
+- [x] Database schema: task_queue, execution_log, evaluations, goals, opportunities, system_config tables
+- [x] Seed initial 4 business goals for Robur Resources
+- [x] Seed default system_config with safety limits
+- [x] Server: Task Generator cron handler (hourly) - LLM decomposes goals into tasks
+- [x] Server: Task Executor cron handler (every 15 min) - picks highest priority PENDING task and executes
+- [x] Server: Evaluator cron handler (daily 6pm AWST / 10:00 UTC) - reviews completed tasks, logs metrics
+- [x] Server: Self-Improver cron handler (weekly Sunday) - analyzes data, adjusts weights
+- [x] Server: Morning briefing cron (8am AWST / 00:00 UTC) - Retell AI call to user
+- [x] Server: Evening briefing cron (5:30pm AWST / 09:30 UTC) - Retell AI call to user
+- [x] Server: Retell AI integration - outbound call via POST /v2/create-phone-call
+- [x] Server: Twilio SMS integration - send SMS and receive webhook
+- [x] Server: SMS webhook handler for STOP kill switch and approval responses
+- [x] Server: Safety controls (20 calls/day, 100 emails/day, $50 API/day, $500 approval gate)
+- [x] Server: tRPC routers for dashboard (goals CRUD, task queue, execution log, opportunities, system config)
+- [x] Admin Dashboard UI: Task Queue view
+- [x] Admin Dashboard UI: Execution Log view
+- [x] Admin Dashboard UI: Goals management (add/edit)
+- [x] Admin Dashboard UI: Opportunities view
+- [x] Admin Dashboard UI: System Health & Config
+- [x] Admin Dashboard UI: Daily Metrics
+- [x] Register all cron handlers in server/_core/index.ts
+- [x] Configure secrets (RETELL_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER)
+- [x] Write vitest tests for core logic
+- [ ] Create heartbeat cron jobs after deployment
+- [x] Enforce daily API spend tracking against $50 cap in executor
+- [ ] Add full goal editing UI (edit text, priority, sub-goals for existing goals)
