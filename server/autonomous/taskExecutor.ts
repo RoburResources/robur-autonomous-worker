@@ -6,6 +6,7 @@ import {
 } from "../db";
 import { makeOutboundCall } from "../integrations/retell";
 import { sendSMS } from "../integrations/twilio";
+import { runPreflightValidation } from "./preflightValidator";
 
 /**
  * Task Executor — runs every 15 minutes
@@ -28,6 +29,23 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     const task = await getHighestPriorityPendingTask();
     if (!task) {
       return { executed: false, error: "No pending tasks" };
+    }
+
+    // ═══ PRE-FLIGHT VALIDATION ═══
+    const preflight = await runPreflightValidation(task);
+    if (!preflight.canExecute) {
+      await updateTask(task.id, {
+        status: "failed",
+        resultSummary: `Pre-flight blocked: ${preflight.blockedReason}`,
+      });
+      await logExecution({
+        taskId: task.id,
+        actionType: "preflight_blocked",
+        details: { reason: preflight.blockedReason, missing: preflight.missingCredentials },
+        outcome: "failure",
+        errorMessage: preflight.blockedReason,
+      });
+      return { executed: false, taskId: task.id, error: `Pre-flight: ${preflight.blockedReason}` };
     }
 
     // ═══ EXTERNAL CONTACT APPROVAL GATE (7-day restriction) ═══
