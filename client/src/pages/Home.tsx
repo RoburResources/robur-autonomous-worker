@@ -14,6 +14,7 @@ export default function Home() {
   const { data: pendingTasks } = trpc.tasks.byStatus.useQuery({ status: "pending", limit: 5 });
   const { data: recentExecs } = trpc.executions.list.useQuery({ limit: 10 });
   const toggleKillSwitch = trpc.health.toggleKillSwitch.useMutation();
+  const isRetired = health?.systemStatus === "retired";
 
   const handleToggleKillSwitch = async () => {
     if (!health) return;
@@ -46,10 +47,12 @@ export default function Home() {
             )}
             <div>
               <p className="font-semibold">
-                System: {health?.killSwitchActive ? "PAUSED" : "ACTIVE"}
+                System: {isRetired ? "RETIRED" : health?.killSwitchActive ? "PAUSED" : "ACTIVE"}
               </p>
               <p className="text-xs text-muted-foreground">
-                {health?.killSwitchActive
+                {isRetired
+                  ? "This legacy worker is retired by deployment policy and cannot execute autonomous work."
+                  : health?.killSwitchActive
                   ? "All autonomous operations are paused. Send START via SMS or click to resume."
                   : "Autonomous worker is running. Generating tasks, executing, and evaluating."}
               </p>
@@ -59,9 +62,9 @@ export default function Home() {
             variant={health?.killSwitchActive ? "default" : "destructive"}
             size="sm"
             onClick={handleToggleKillSwitch}
-            disabled={toggleKillSwitch.isPending}
+            disabled={toggleKillSwitch.isPending || isRetired}
           >
-            {health?.killSwitchActive ? "Resume Operations" : "Kill Switch"}
+            {isRetired ? "Retired" : health?.killSwitchActive ? "Resume Operations" : "Kill Switch"}
           </Button>
         </CardContent>
       </Card>

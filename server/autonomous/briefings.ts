@@ -1,9 +1,10 @@
 import { invokeLLM } from "../_core/llm";
 import {
   getActiveGoals, getTasksByStatus, getRecentTasks, getRecentMetrics,
-  getOpportunities, isKillSwitchActive, logExecution, getConfig
+  getOpportunities, logExecution, getConfig
 } from "../db";
 import { makeBriefingCall } from "../integrations/retell";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
  * Morning Briefing — 8:00am AWST (00:00 UTC)
@@ -11,8 +12,9 @@ import { makeBriefingCall } from "../integrations/retell";
  */
 export async function runMorningBriefing(): Promise<{ success: boolean; error?: string }> {
   try {
-    if (await isKillSwitchActive()) {
-      return { success: false, error: "Kill switch is active" };
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      return { success: false, error: gate.reason || "Legacy worker is unavailable" };
     }
 
     // Gather data for briefing
@@ -79,8 +81,9 @@ Generate a natural, conversational briefing script for Addison to deliver.`
  */
 export async function runEveningBriefing(): Promise<{ success: boolean; error?: string }> {
   try {
-    if (await isKillSwitchActive()) {
-      return { success: false, error: "Kill switch is active" };
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      return { success: false, error: gate.reason || "Legacy worker is unavailable" };
     }
 
     // Gather data for briefing

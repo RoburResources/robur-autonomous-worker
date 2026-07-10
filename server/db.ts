@@ -1,5 +1,6 @@
 import { eq, desc, asc, and, sql, gte, lte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import { createHash } from "node:crypto";
 import {
   InsertUser, users,
   goals, InsertGoal, Goal,
@@ -100,6 +101,13 @@ export async function getHighestPriorityPendingTask() {
   const db = await getDb();
   if (!db) return null;
   const results = await db.select().from(taskQueue).where(eq(taskQueue.status, "pending")).orderBy(desc(taskQueue.priorityScore)).limit(1);
+  return results[0] || null;
+}
+
+export async function getTaskById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const results = await db.select().from(taskQueue).where(eq(taskQueue.id, id)).limit(1);
   return results[0] || null;
 }
 
@@ -209,6 +217,33 @@ export async function setConfig(key: string, value: string, description?: string
   }
 }
 
+/**
+ * Atomically claim an authenticated Twilio message SID. The unique config key
+ * makes replayed signed webhooks harmless, including replays after a restart.
+ * The raw provider identifier is not persisted.
+ */
+export async function claimInboundSms(messageSid: string): Promise<boolean> {
+  if (!/^SM[a-fA-F0-9]{32}$/.test(messageSid)) return false;
+  const db = await getDb();
+  if (!db) return false;
+
+  const digest = createHash("sha256").update(messageSid, "utf8").digest("hex");
+  try {
+    await db.insert(systemConfig).values({
+      key: `processed_sms_${digest}`,
+      value: new Date().toISOString(),
+      description: "Authenticated Twilio inbound message replay claim",
+    });
+    return true;
+  } catch (error) {
+    const mysqlError = error as { code?: string; errno?: number };
+    if (mysqlError.code === "ER_DUP_ENTRY" || mysqlError.errno === 1062) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 // ─── Daily Metrics Helpers ──────────────────────────────────────────────────
 
 export async function getTodayMetrics(): Promise<any> {
@@ -266,5 +301,5 @@ export async function getDailyEmailCount(): Promise<number> {
 
 export async function isKillSwitchActive(): Promise<boolean> {
   const val = await getConfig("kill_switch_active");
-  return val === "true";
+  return val !== "false";
 }

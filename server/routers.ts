@@ -1,8 +1,15 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { ownerProcedure, publicProcedure, router } from "./_core/trpc";
+import {
+  getLegacyWorkerEnvironmentGate,
+  getLegacyWorkerRuntimeGate,
+  pauseLegacyWorker,
+  resumeLegacyWorkerByVerifiedOwner,
+} from "./safety/legacyWorkerGate";
 import {
   getAllGoals, getActiveGoals, createGoal, updateGoal,
   getRecentTasks, getTasksByStatus, updateTask, createTask,
@@ -11,7 +18,7 @@ import {
   getOpportunities, createOpportunity, updateOpportunity,
   getAllConfig, getConfig, setConfig,
   getRecentMetrics, getTodayMetrics,
-  isKillSwitchActive, getDailyCallCount, getDailyEmailCount,
+  getDailyCallCount, getDailyEmailCount,
 } from "./db";
 
 export const appRouter = router({
@@ -34,7 +41,7 @@ export const appRouter = router({
     active: publicProcedure.query(async () => {
       return getActiveGoals();
     }),
-    create: protectedProcedure
+    create: ownerProcedure
       .input(z.object({
         goalText: z.string().min(1),
         priority: z.number().min(1).max(10).default(5),
@@ -49,7 +56,7 @@ export const appRouter = router({
         });
         return { success: true };
       }),
-    update: protectedProcedure
+    update: ownerProcedure
       .input(z.object({
         id: z.number(),
         goalText: z.string().optional(),
@@ -81,7 +88,7 @@ export const appRouter = router({
       .query(async ({ input }) => {
         return getTasksByStatus(input.status, input.limit);
       }),
-    update: protectedProcedure
+    update: ownerProcedure
       .input(z.object({
         id: z.number(),
         status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled", "awaiting_approval"]).optional(),
@@ -92,7 +99,7 @@ export const appRouter = router({
         await updateTask(id, data);
         return { success: true };
       }),
-    create: protectedProcedure
+    create: ownerProcedure
       .input(z.object({
         description: z.string().min(1),
         actionType: z.string().default("web_research"),
@@ -142,7 +149,7 @@ export const appRouter = router({
       .query(async ({ input }) => {
         return getOpportunities(input?.limit || 50);
       }),
-    create: protectedProcedure
+    create: ownerProcedure
       .input(z.object({
         source: z.string(),
         description: z.string(),
@@ -158,7 +165,7 @@ export const appRouter = router({
         });
         return { success: true };
       }),
-    update: protectedProcedure
+    update: ownerProcedure
       .input(z.object({
         id: z.number(),
         status: z.enum(["new", "investigating", "actioned", "dismissed"]).optional(),
@@ -173,15 +180,15 @@ export const appRouter = router({
 
   // ─── System Config ────────────────────────────────────────────────────────
   config: router({
-    list: publicProcedure.query(async () => {
+    list: ownerProcedure.query(async () => {
       return getAllConfig();
     }),
-    get: publicProcedure
+    get: ownerProcedure
       .input(z.object({ key: z.string() }))
       .query(async ({ input }) => {
         return getConfig(input.key);
       }),
-    set: protectedProcedure
+    set: ownerProcedure
       .input(z.object({
         key: z.string(),
         value: z.string(),
@@ -208,16 +215,19 @@ export const appRouter = router({
   // ─── System Health ────────────────────────────────────────────────────────
   health: router({
     status: publicProcedure.query(async () => {
-      const killSwitch = await isKillSwitchActive();
-      const systemStatus = await getConfig("system_status") || "unknown";
+      const environmentGate = getLegacyWorkerEnvironmentGate();
+      const runtimeGate = await getLegacyWorkerRuntimeGate();
+      const storedSystemStatus = await getConfig("system_status") || "unknown";
       const callsToday = await getDailyCallCount();
       const emailsToday = await getDailyEmailCount();
       const maxCalls = parseInt(await getConfig("max_calls_per_day") || "20");
       const maxEmails = parseInt(await getConfig("max_emails_per_day") || "100");
 
       return {
-        systemStatus,
-        killSwitchActive: killSwitch,
+        systemStatus: environmentGate.allowed ? storedSystemStatus : "retired",
+        killSwitchActive: !runtimeGate.allowed,
+        autonomyEnabled: runtimeGate.allowed,
+        retirementReason: runtimeGate.allowed ? null : runtimeGate.reason,
         callsToday,
         maxCalls,
         emailsToday,
@@ -225,11 +235,21 @@ export const appRouter = router({
         timestamp: new Date().toISOString(),
       };
     }),
-    toggleKillSwitch: protectedProcedure
+    toggleKillSwitch: ownerProcedure
       .input(z.object({ active: z.boolean() }))
-      .mutation(async ({ input }) => {
-        await setConfig("kill_switch_active", input.active ? "true" : "false");
-        await setConfig("system_status", input.active ? "paused" : "active");
+      .mutation(async ({ input, ctx }) => {
+        if (input.active) {
+          await pauseLegacyWorker("Paused by verified owner in control panel");
+        } else {
+          try {
+            await resumeLegacyWorkerByVerifiedOwner(ctx.user.openId);
+          } catch (error) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: error instanceof Error ? error.message : "Legacy worker cannot be resumed",
+            });
+          }
+        }
         return { success: true, killSwitchActive: input.active };
       }),
   }),

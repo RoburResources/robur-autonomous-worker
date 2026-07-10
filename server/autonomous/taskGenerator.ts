@@ -1,5 +1,6 @@
 import { invokeLLM } from "../_core/llm";
-import { getActiveGoals, createTask, getConfig, getAllConfig, isKillSwitchActive, getRecentTasks, logExecution } from "../db";
+import { getActiveGoals, createTask, getConfig, getAllConfig, getRecentTasks, logExecution } from "../db";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
  * Task Generator — runs every 15 minutes
@@ -14,8 +15,9 @@ import { getActiveGoals, createTask, getConfig, getAllConfig, isKillSwitchActive
 export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?: string }> {
   try {
     // Safety check
-    if (await isKillSwitchActive()) {
-      return { tasksCreated: 0, error: "Kill switch is active — system paused" };
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      return { tasksCreated: 0, error: gate.reason || "Legacy worker is unavailable" };
     }
 
     const activeGoals = await getActiveGoals();

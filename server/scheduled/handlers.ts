@@ -4,7 +4,11 @@ import { runTaskGenerator } from "../autonomous/taskGenerator";
 import { runTaskExecutor } from "../autonomous/taskExecutor";
 import { runEvaluator } from "../autonomous/evaluator";
 import { runSelfImprover } from "../autonomous/selfImprover";
-import { runMorningBriefing, runEveningBriefing } from "../autonomous/briefings";
+import {
+  runMorningBriefing,
+  runEveningBriefing,
+} from "../autonomous/briefings";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
  * Authenticate cron requests
@@ -17,10 +21,30 @@ async function authenticateCron(req: Request, res: Response): Promise<boolean> {
       return false;
     }
     return true;
-  } catch (error: any) {
-    res.status(403).json({ error: "Authentication failed", detail: error.message });
+  } catch {
+    res.status(403).json({ error: "Authentication failed" });
     return false;
   }
+}
+
+async function authorizeScheduledRun(
+  req: Request,
+  res: Response
+): Promise<boolean> {
+  if (!(await authenticateCron(req, res))) return false;
+
+  const gate = await getLegacyWorkerRuntimeGate();
+  if (!gate.allowed) {
+    res.status(423).json({
+      ok: false,
+      error: "Legacy autonomous worker is unavailable",
+      reason: gate.reason,
+      timestamp: new Date().toISOString(),
+    });
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -29,17 +53,17 @@ async function authenticateCron(req: Request, res: Response): Promise<boolean> {
  */
 export async function taskGeneratorHandler(req: Request, res: Response) {
   try {
-    if (!(await authenticateCron(req, res))) return;
+    if (!(await authorizeScheduledRun(req, res))) return;
     const result = await runTaskGenerator();
     res.json({ ok: true, ...result, timestamp: new Date().toISOString() });
   } catch (error: any) {
     console.error("[Scheduled] Task generator error:", error);
-    res.status(500).json({
-      error: error.message,
-      stack: error.stack,
-      context: { url: req.url, taskUid: req.body?.taskUid },
-      timestamp: new Date().toISOString(),
-    });
+    res
+      .status(500)
+      .json({
+        error: "Scheduled task generator failed",
+        timestamp: new Date().toISOString(),
+      });
   }
 }
 
@@ -49,17 +73,17 @@ export async function taskGeneratorHandler(req: Request, res: Response) {
  */
 export async function taskExecutorHandler(req: Request, res: Response) {
   try {
-    if (!(await authenticateCron(req, res))) return;
+    if (!(await authorizeScheduledRun(req, res))) return;
     const result = await runTaskExecutor();
     res.json({ ok: true, ...result, timestamp: new Date().toISOString() });
   } catch (error: any) {
     console.error("[Scheduled] Task executor error:", error);
-    res.status(500).json({
-      error: error.message,
-      stack: error.stack,
-      context: { url: req.url },
-      timestamp: new Date().toISOString(),
-    });
+    res
+      .status(500)
+      .json({
+        error: "Scheduled task executor failed",
+        timestamp: new Date().toISOString(),
+      });
   }
 }
 
@@ -69,17 +93,17 @@ export async function taskExecutorHandler(req: Request, res: Response) {
  */
 export async function evaluatorHandler(req: Request, res: Response) {
   try {
-    if (!(await authenticateCron(req, res))) return;
+    if (!(await authorizeScheduledRun(req, res))) return;
     const result = await runEvaluator();
     res.json({ ok: true, ...result, timestamp: new Date().toISOString() });
   } catch (error: any) {
     console.error("[Scheduled] Evaluator error:", error);
-    res.status(500).json({
-      error: error.message,
-      stack: error.stack,
-      context: { url: req.url },
-      timestamp: new Date().toISOString(),
-    });
+    res
+      .status(500)
+      .json({
+        error: "Scheduled evaluator failed",
+        timestamp: new Date().toISOString(),
+      });
   }
 }
 
@@ -89,17 +113,17 @@ export async function evaluatorHandler(req: Request, res: Response) {
  */
 export async function selfImproverHandler(req: Request, res: Response) {
   try {
-    if (!(await authenticateCron(req, res))) return;
+    if (!(await authorizeScheduledRun(req, res))) return;
     const result = await runSelfImprover();
     res.json({ ok: true, ...result, timestamp: new Date().toISOString() });
   } catch (error: any) {
     console.error("[Scheduled] Self-improver error:", error);
-    res.status(500).json({
-      error: error.message,
-      stack: error.stack,
-      context: { url: req.url },
-      timestamp: new Date().toISOString(),
-    });
+    res
+      .status(500)
+      .json({
+        error: "Scheduled self-improver failed",
+        timestamp: new Date().toISOString(),
+      });
   }
 }
 
@@ -109,17 +133,17 @@ export async function selfImproverHandler(req: Request, res: Response) {
  */
 export async function morningBriefingHandler(req: Request, res: Response) {
   try {
-    if (!(await authenticateCron(req, res))) return;
+    if (!(await authorizeScheduledRun(req, res))) return;
     const result = await runMorningBriefing();
     res.json({ ok: true, ...result, timestamp: new Date().toISOString() });
   } catch (error: any) {
     console.error("[Scheduled] Morning briefing error:", error);
-    res.status(500).json({
-      error: error.message,
-      stack: error.stack,
-      context: { url: req.url },
-      timestamp: new Date().toISOString(),
-    });
+    res
+      .status(500)
+      .json({
+        error: "Scheduled morning briefing failed",
+        timestamp: new Date().toISOString(),
+      });
   }
 }
 
@@ -129,16 +153,16 @@ export async function morningBriefingHandler(req: Request, res: Response) {
  */
 export async function eveningBriefingHandler(req: Request, res: Response) {
   try {
-    if (!(await authenticateCron(req, res))) return;
+    if (!(await authorizeScheduledRun(req, res))) return;
     const result = await runEveningBriefing();
     res.json({ ok: true, ...result, timestamp: new Date().toISOString() });
   } catch (error: any) {
     console.error("[Scheduled] Evening briefing error:", error);
-    res.status(500).json({
-      error: error.message,
-      stack: error.stack,
-      context: { url: req.url },
-      timestamp: new Date().toISOString(),
-    });
+    res
+      .status(500)
+      .json({
+        error: "Scheduled evening briefing failed",
+        timestamp: new Date().toISOString(),
+      });
   }
 }
