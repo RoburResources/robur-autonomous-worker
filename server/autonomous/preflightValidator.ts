@@ -1,4 +1,5 @@
 import { getConfig } from "../db";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 export interface PreflightResult {
   canExecute: boolean;
@@ -19,9 +20,9 @@ export async function runPreflightValidation(task: any): Promise<PreflightResult
   const warnings: string[] = [];
 
   // ── 1. Check kill switch ──────────────────────────────────────────────────
-  const killSwitch = await getConfig("kill_switch_active");
-  if (killSwitch === "true") {
-    return { canExecute: false, blockedReason: "Kill switch is active — system paused" };
+  const gate = await getLegacyWorkerRuntimeGate();
+  if (!gate.allowed) {
+    return { canExecute: false, blockedReason: gate.reason || "Legacy worker is unavailable" };
   }
 
   // ── 2. Check credential availability per action type ─────────────────────

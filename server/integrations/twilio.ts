@@ -3,6 +3,9 @@
  * Handles outbound SMS and inbound webhook processing
  */
 
+import { createHmac, timingSafeEqual } from "node:crypto";
+import type { Request } from "express";
+
 function getTwilioCredentials() {
   return {
     accountSid: process.env.TWILIO_ACCOUNT_SID || "",
@@ -14,11 +17,17 @@ function getTwilioCredentials() {
 /**
  * Send an SMS via Twilio REST API
  */
-export async function sendSMS(to: string, body: string): Promise<{ sid: string; status: string }> {
+export async function sendSMS(
+  to: string,
+  body: string
+): Promise<{ sid: string; status: string }> {
   const { accountSid, authToken, phoneNumber } = getTwilioCredentials();
 
   if (!accountSid || !authToken || !phoneNumber) {
-    console.warn("[Twilio] Credentials not configured, SMS not sent:", { to, body: body.substring(0, 50) });
+    console.warn("[Twilio] Credentials not configured, SMS not sent:", {
+      to,
+      body: body.substring(0, 50),
+    });
     return { sid: "not_configured", status: "skipped" };
   }
 
@@ -28,7 +37,7 @@ export async function sendSMS(to: string, body: string): Promise<{ sid: string; 
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Authorization": `Basic ${auth}`,
+      Authorization: `Basic ${auth}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
@@ -50,23 +59,85 @@ export async function sendSMS(to: string, body: string): Promise<{ sid: string; 
   };
 }
 
+function stringFormFields(body: unknown): Record<string, string> | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+
+  const fields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (typeof value !== "string") return null;
+    fields[key] = value;
+  }
+  return fields;
+}
+
+/** Official Twilio form-signature calculation: URL + sorted form fields. */
+export function computeTwilioSignature(
+  authToken: string,
+  webhookUrl: string,
+  body: Record<string, string>
+): string {
+  let signedPayload = webhookUrl;
+  for (const key of Object.keys(body).sort()) {
+    signedPayload += `${key}${body[key]}`;
+  }
+  return createHmac("sha1", authToken)
+    .update(signedPayload, "utf8")
+    .digest("base64");
+}
+
 /**
- * Validate Twilio webhook signature (basic validation)
+ * Validate the exact Twilio signature against a configured canonical HTTPS
+ * webhook URL. We do not derive the URL from proxy-controlled headers.
  */
-export function validateTwilioWebhook(req: any): boolean {
-  // In production, validate X-Twilio-Signature header
-  // For now, check that required fields are present
-  const body = req.body;
-  return !!(body && (body.Body !== undefined || body.From));
+export function validateTwilioWebhook(req: Request): boolean {
+  const authToken = process.env.TWILIO_AUTH_TOKEN || "";
+  const webhookUrl = process.env.TWILIO_SMS_WEBHOOK_URL || "";
+  const signature = req.get("x-twilio-signature") || "";
+  const formFields = stringFormFields(req.body);
+
+  if (
+    !authToken ||
+    !webhookUrl.startsWith("https://") ||
+    !signature ||
+    !formFields
+  ) {
+    return false;
+  }
+
+  const expected = Buffer.from(
+    computeTwilioSignature(authToken, webhookUrl, formFields),
+    "utf8"
+  );
+  const supplied = Buffer.from(signature, "utf8");
+  return (
+    expected.length === supplied.length && timingSafeEqual(expected, supplied)
+  );
+}
+
+export function isVerifiedOwnerSmsRequest(req: Request): boolean {
+  const ownerPhone = process.env.OWNER_PHONE_E164 || "";
+  const formFields = stringFormFields(req.body);
+  const sender = formFields?.From || "";
+
+  return (
+    /^\+[1-9]\d{7,14}$/.test(ownerPhone) &&
+    sender === ownerPhone &&
+    validateTwilioWebhook(req)
+  );
 }
 
 /**
  * Parse inbound SMS from Twilio webhook
  */
-export function parseInboundSMS(body: any): { from: string; message: string; messageSid: string } {
+export function parseInboundSMS(body: unknown): {
+  from: string;
+  message: string;
+  messageSid: string;
+} {
+  const fields = stringFormFields(body) || {};
   return {
-    from: body.From || "",
-    message: (body.Body || "").trim(),
-    messageSid: body.MessageSid || "",
+    from: fields.From || "",
+    message: (fields.Body || "").trim(),
+    messageSid: fields.MessageSid || "",
   };
 }

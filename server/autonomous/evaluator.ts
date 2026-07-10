@@ -1,10 +1,11 @@
 import { invokeLLM } from "../_core/llm";
 import {
   getCompletedTasksSince, createEvaluation, logExecution,
-  getConfig, isKillSwitchActive, getRecentEvaluations, upsertDailyMetrics
+  getConfig, getRecentEvaluations, upsertDailyMetrics
 } from "../db";
 import { makeBriefingCall } from "../integrations/retell";
 import { notifyOwner } from "../_core/notification";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
  * Evaluator — runs daily at 6pm AWST (10:00 UTC)
@@ -13,8 +14,9 @@ import { notifyOwner } from "../_core/notification";
  */
 export async function runEvaluator(): Promise<{ evaluated: number; error?: string }> {
   try {
-    if (await isKillSwitchActive()) {
-      return { evaluated: 0, error: "Kill switch is active" };
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      return { evaluated: 0, error: gate.reason || "Legacy worker is unavailable" };
     }
 
     // Get tasks completed in the last 24 hours

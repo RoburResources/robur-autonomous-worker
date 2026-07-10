@@ -1,12 +1,13 @@
 import { invokeLLM } from "../_core/llm";
 import {
   getHighestPriorityPendingTask, updateTask, logExecution,
-  getConfig, isKillSwitchActive, getDailyCallCount, getDailyEmailCount,
+  getConfig, getDailyCallCount, getDailyEmailCount,
   upsertDailyMetrics, getTodayMetrics
 } from "../db";
 import { makeOutboundCall } from "../integrations/retell";
 import { sendSMS } from "../integrations/twilio";
 import { runPreflightValidation } from "./preflightValidator";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
  * Task Executor — runs every 15 minutes
@@ -15,8 +16,9 @@ import { runPreflightValidation } from "./preflightValidator";
 export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: number; error?: string }> {
   try {
     // Safety checks
-    if (await isKillSwitchActive()) {
-      return { executed: false, error: "Kill switch is active" };
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      return { executed: false, error: gate.reason || "Legacy worker is unavailable" };
     }
 
     // Check daily API spend cap

@@ -1,6 +1,7 @@
 import { invokeLLM } from "../_core/llm";
-import { getRecentEvaluations, getConfig, setConfig, logExecution, isKillSwitchActive } from "../db";
+import { getRecentEvaluations, getConfig, setConfig, logExecution } from "../db";
 import { notifyOwner } from "../_core/notification";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
  * Self-Improver — runs weekly on Sunday
@@ -9,8 +10,9 @@ import { notifyOwner } from "../_core/notification";
  */
 export async function runSelfImprover(): Promise<{ improved: boolean; changes: string[]; error?: string }> {
   try {
-    if (await isKillSwitchActive()) {
-      return { improved: false, changes: [], error: "Kill switch is active" };
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      return { improved: false, changes: [], error: gate.reason || "Legacy worker is unavailable" };
     }
 
     const recentEvals = await getRecentEvaluations(50);

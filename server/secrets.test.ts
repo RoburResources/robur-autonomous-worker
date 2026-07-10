@@ -1,40 +1,44 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Request } from "express";
+import {
+  LEGACY_WORKER_RISK_ACK,
+  getLegacyWorkerEnvironmentGate,
+} from "./safety/legacyWorkerGate";
+import { validateTwilioWebhook } from "./integrations/twilio";
 
-describe("Secrets Validation", () => {
-  it("RETELL_API_KEY should be configured", () => {
-    const key = process.env.RETELL_API_KEY;
-    expect(key).toBeDefined();
-    expect(key!.length).toBeGreaterThan(10);
-    expect(key).toMatch(/^key_/);
+describe("secret-safe configuration", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("does not require provider secrets while the legacy worker is retired", () => {
+    expect(getLegacyWorkerEnvironmentGate({})).toMatchObject({
+      allowed: false,
+    });
   });
 
-  it("RETELL_AGENT_ID should be configured", () => {
-    const id = process.env.RETELL_AGENT_ID;
-    expect(id).toBeDefined();
-    expect(id).toMatch(/^agent_/);
+  it("does not enable autonomy merely because provider credentials exist", () => {
+    expect(
+      getLegacyWorkerEnvironmentGate({
+        RETELL_API_KEY: "test-only-placeholder",
+        TWILIO_AUTH_TOKEN: "test-only-placeholder",
+      })
+    ).toMatchObject({ allowed: false });
   });
 
-  it("USER_PHONE should be configured with Australian format", () => {
-    const phone = process.env.USER_PHONE;
-    expect(phone).toBeDefined();
-    expect(phone).toMatch(/^\+61/);
+  it("requires explicit risk acknowledgement and a configured owner identity", () => {
+    expect(
+      getLegacyWorkerEnvironmentGate({
+        LEGACY_WORKER_ENABLED: "true",
+        LEGACY_WORKER_RISK_ACK,
+      })
+    ).toMatchObject({ allowed: false });
   });
 
-  it("TWILIO_ACCOUNT_SID should be configured", () => {
-    const sid = process.env.TWILIO_ACCOUNT_SID;
-    expect(sid).toBeDefined();
-    expect(sid!.length).toBeGreaterThan(10);
-  });
+  it("fails webhook authentication closed when its secret is unavailable", () => {
+    const req = {
+      body: { Body: "START", From: "+61400000000" },
+      get: () => "forged-signature",
+    } as unknown as Request;
 
-  it("TWILIO_AUTH_TOKEN should be configured", () => {
-    const token = process.env.TWILIO_AUTH_TOKEN;
-    expect(token).toBeDefined();
-    expect(token!.length).toBeGreaterThan(10);
-  });
-
-  it("TWILIO_PHONE_NUMBER should be configured", () => {
-    const phone = process.env.TWILIO_PHONE_NUMBER;
-    expect(phone).toBeDefined();
-    expect(phone!.length).toBeGreaterThan(5);
+    expect(validateTwilioWebhook(req)).toBe(false);
   });
 });
