@@ -44,7 +44,7 @@ export async function runEvaluator(): Promise<{ evaluated: number; error?: strin
         messages: [
           {
             role: "system",
-            content: `You are evaluating the outcome of an autonomous business task for Robur Resources (scrap metal company, Perth WA). Assess whether the task was truly successful, what was learned, and what could be improved.`
+            content: `You are evaluating the outcome of an autonomous business task. Assess whether the task was truly successful, what was learned, and what could be improved.`
           },
           {
             role: "user",

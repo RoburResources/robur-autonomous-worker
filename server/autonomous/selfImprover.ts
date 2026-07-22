@@ -40,7 +40,7 @@ export async function runSelfImprover(): Promise<{ improved: boolean; changes: s
       messages: [
         {
           role: "system",
-          content: `You are the self-improvement engine for an autonomous business AI running Robur Resources (scrap metal, Perth WA). Analyze recent task evaluations and recommend adjustments to strategy weights and approaches.
+          content: `You are the self-improvement engine for an autonomous business AI. Analyze recent task evaluations and recommend adjustments to strategy weights and approaches.
 
 Current priority weights:
 - Outbound calls: ${callWeight}

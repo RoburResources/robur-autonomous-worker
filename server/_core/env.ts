@@ -9,11 +9,11 @@ export const ENV = {
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   // Retell AI
   retellApiKey: process.env.RETELL_API_KEY ?? "",
-  retellAgentId: process.env.RETELL_AGENT_ID ?? "agent_7f02eb1896dd1e6deb38e54942",
+  retellAgentId: process.env.RETELL_AGENT_ID ?? "",
   // Twilio
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID ?? "",
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN ?? "",
   twilioPhoneNumber: process.env.TWILIO_PHONE_NUMBER ?? "",
-  // User
-  userPhone: process.env.USER_PHONE ?? "+61495007200",
+  // User contact (set via USER_PHONE env var)
+  userPhone: process.env.USER_PHONE ?? "",
 };

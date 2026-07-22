@@ -70,8 +70,8 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
         if (!isMichaelCall) {
           // Requires SMS approval before contacting external person
           await updateTask(task.id, { status: "awaiting_approval" });
-          const userPhone = await getConfig("user_phone") || "+61495007200";
-          const actionLabel = task.actionType === "outbound_call" ? "CALL" : 
+      const userPhone = await getConfig("user_phone") || process.env.USER_PHONE || "";
+      const actionLabel = task.actionType === "outbound_call" ? "CALL" :
                              task.actionType === "send_email" ? "EMAIL" : "SMS";
           await sendSMS(
             userPhone,
@@ -94,10 +94,10 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     if (estimatedValue > approvalThreshold) {
       // Requires SMS approval
       await updateTask(task.id, { status: "awaiting_approval" });
-      const userPhone = await getConfig("user_phone") || "+61495007200";
+      const userPhone = await getConfig("user_phone") || process.env.USER_PHONE || "";
       await sendSMS(
         userPhone,
-        `[Robur AI] Approval needed: "${task.description}" (est. value: $${(estimatedValue / 100).toFixed(0)}). Reply APPROVE to proceed or REJECT to cancel. Task #${task.id}`
+        `[AI Worker] Approval needed: "${task.description}" (est. value: $${(estimatedValue / 100).toFixed(0)}). Reply APPROVE to proceed or REJECT to cancel. Task #${task.id}`
       );
       await logExecution({
         taskId: task.id,
@@ -191,7 +191,7 @@ async function executeCall(task: any): Promise<{ success: boolean; summary: stri
     const response = await invokeLLM({
       model: "gpt-5-mini",
       messages: [
-        { role: "system", content: "You are preparing a brief for the Addison AI voice agent to make a business call for Robur Resources (scrap metal company in Perth). Generate a concise call objective and key talking points." },
+        { role: "system", content: "You are preparing a brief for an AI voice agent to make a business call. Generate a concise call objective and key talking points based on the task description." },
         { role: "user", content: `Task: ${task.description}\nGenerate a brief call script/objective for Addison.` }
       ]
     });
@@ -200,8 +200,8 @@ async function executeCall(task: any): Promise<{ success: boolean; summary: stri
 
     // Make the call via Retell AI
     const callResult = await makeOutboundCall({
-      agentId: await getConfig("retell_agent_id") || "agent_7f02eb1896dd1e6deb38e54942",
-      toNumber: (task.actionPayload as any)?.phoneNumber || await getConfig("user_phone") || "+61495007200",
+      agentId: await getConfig("retell_agent_id") || process.env.RETELL_AGENT_ID || "",
+      toNumber: (task.actionPayload as any)?.phoneNumber || await getConfig("user_phone") || process.env.USER_PHONE || "",
       metadata: {
         taskId: task.id,
         objective: callBrief,
@@ -231,7 +231,7 @@ async function executeEmail(task: any): Promise<{ success: boolean; summary: str
     const response = await invokeLLM({
       model: "gpt-5-mini",
       messages: [
-        { role: "system", content: "You are drafting a professional business email for Robur Resources, a scrap metal collection and recycling company in Perth, WA. Keep it concise, professional, and action-oriented. Sign off as 'Michael T, General Manager, Robur Resources'." },
+        { role: "system", content: "You are drafting a professional business email. Keep it concise, professional, and action-oriented. Sign off as the business owner/manager." },
         { role: "user", content: `Draft an email for this task: ${task.description}` }
       ]
     });
@@ -250,7 +250,7 @@ async function executeEmail(task: any): Promise<{ success: boolean; summary: str
 
 async function executeSMS(task: any): Promise<{ success: boolean; summary: string }> {
   try {
-    const toNumber = (task.actionPayload as any)?.phoneNumber || await getConfig("user_phone") || "+61495007200";
+    const toNumber = (task.actionPayload as any)?.phoneNumber || await getConfig("user_phone") || process.env.USER_PHONE || "";
     const message = (task.actionPayload as any)?.message || task.description;
 
     await sendSMS(toNumber, `[Robur AI] ${message}`);
@@ -270,7 +270,7 @@ async function executeResearch(task: any): Promise<{ success: boolean; summary: 
     const response = await invokeLLM({
       model: "gpt-5-mini",
       messages: [
-        { role: "system", content: "You are a business research assistant for Robur Resources (scrap metal company in Perth, WA). Provide actionable research findings based on the task. Include specific names, contacts, and data points where possible. If you cannot find real data, clearly state what would need to be verified." },
+        { role: "system", content: "You are a business research assistant. Provide actionable research findings based on the task. Include specific names, contacts, and data points where possible. If you cannot find real data, clearly state what would need to be verified." },
         { role: "user", content: `Research task: ${task.description}\n\nProvide findings and actionable next steps.` }
       ]
     });
