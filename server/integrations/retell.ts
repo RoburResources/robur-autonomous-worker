@@ -70,8 +70,11 @@ export async function makeOutboundCall(params: OutboundCallParams): Promise<Call
  * Make a briefing call to the user via Addison
  */
 export async function makeBriefingCall(briefingType: "morning" | "evening", briefingContent: string): Promise<CallResult> {
-  const agentId = process.env.RETELL_AGENT_ID || "agent_7f02eb1896dd1e6deb38e54942";
-  const userPhone = process.env.USER_PHONE || "+61495007200";
+  const agentId = process.env.RETELL_AGENT_ID || "";
+  const userPhone = process.env.USER_PHONE || "";
+  if (!agentId || !userPhone) {
+    throw new Error("RETELL_AGENT_ID and USER_PHONE must be configured for briefing calls");
+  }
 
   return makeOutboundCall({
     agentId,

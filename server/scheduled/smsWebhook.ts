@@ -1,20 +1,40 @@
 import { Request, Response } from "express";
-import { parseInboundSMS } from "../integrations/twilio";
-import { setConfig, getConfig, updateTask, logExecution, getTasksByStatus } from "../db";
+import {
+  isVerifiedOwnerSmsRequest,
+  parseInboundSMS,
+} from "../integrations/twilio";
+import {
+  claimInboundSms,
+  getConfig,
+  getTaskById,
+  updateTask,
+  logExecution,
+} from "../db";
 import { sendSMS } from "../integrations/twilio";
+import {
+  getLegacyWorkerRuntimeGate,
+  pauseLegacyWorker,
+  resumeLegacyWorkerByVerifiedOwner,
+} from "../safety/legacyWorkerGate";
 
 /**
  * SMS Webhook Handler
  * Receives inbound SMS from Twilio
- * Handles: STOP kill switch, APPROVE/REJECT for pending approvals
- * 
+ * Handles verified owner controls only. Twilio signature and exact owner
+ * sender verification are mandatory before any state change or SMS reply.
+ *
  * POST /api/webhooks/sms
  */
 export async function smsWebhookHandler(req: Request, res: Response) {
   try {
+    if (!isVerifiedOwnerSmsRequest(req)) {
+      res.status(403).send("<Response></Response>");
+      return;
+    }
+
     const { from, message, messageSid } = parseInboundSMS(req.body);
 
-    if (!message) {
+    if (!message || !(await claimInboundSms(messageSid))) {
       res.status(200).send("<Response></Response>");
       return;
     }
@@ -23,20 +43,23 @@ export async function smsWebhookHandler(req: Request, res: Response) {
 
     await logExecution({
       actionType: "inbound_sms",
-      details: { from, message, messageSid },
+      details: {
+        messageClaimed: true,
+        command: upperMessage.split(/\s+/, 1)[0],
+        authenticatedOwner: true,
+      },
       outcome: "success",
     });
 
     // STOP kill switch
     if (upperMessage === "STOP") {
-      await setConfig("kill_switch_active", "true", "Kill switch activated via SMS");
-      await setConfig("system_status", "paused", "Paused by STOP command");
+      await pauseLegacyWorker("Paused by verified owner via signed SMS");
 
-      await sendSMS(from, "[Robur AI] All autonomous operations STOPPED. Send START to resume.");
+      await sendSMS(from, "[Robur AI] Legacy autonomous worker PAUSED.");
 
       await logExecution({
         actionType: "kill_switch_activated",
-        details: { triggeredBy: from, method: "sms" },
+        details: { triggeredBy: "verified_owner", method: "signed_sms" },
         outcome: "success",
       });
 
@@ -46,14 +69,24 @@ export async function smsWebhookHandler(req: Request, res: Response) {
 
     // START to resume
     if (upperMessage === "START") {
-      await setConfig("kill_switch_active", "false");
-      await setConfig("system_status", "active");
+      try {
+        await resumeLegacyWorkerByVerifiedOwner(`sms:${from}`);
+      } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : "Legacy worker is retired";
+        await sendSMS(from, `[Robur AI] Resume blocked: ${reason}.`);
+        res.status(200).send("<Response></Response>");
+        return;
+      }
 
-      await sendSMS(from, "[Robur AI] Autonomous operations RESUMED. System is active.");
+      await sendSMS(
+        from,
+        "[Robur AI] Legacy autonomous worker RESUMED by verified owner."
+      );
 
       await logExecution({
         actionType: "kill_switch_deactivated",
-        details: { triggeredBy: from, method: "sms" },
+        details: { triggeredBy: "verified_owner", method: "signed_sms" },
         outcome: "success",
       });
 
@@ -61,44 +94,84 @@ export async function smsWebhookHandler(req: Request, res: Response) {
       return;
     }
 
-    // APPROVE — approve the most recent pending approval task
-    if (upperMessage === "APPROVE" || upperMessage.startsWith("APPROVE")) {
-      const awaitingTasks = await getTasksByStatus("awaiting_approval", 1);
-      if (awaitingTasks.length > 0) {
-        const task = awaitingTasks[0];
+    // APPROVE <id> — approvals must bind to one exact task.
+    if (upperMessage === "APPROVE" || upperMessage.startsWith("APPROVE ")) {
+      const match = /^APPROVE\s+#?(\d+)$/.exec(upperMessage);
+      if (!match) {
+        await sendSMS(
+          from,
+          "[Robur AI] Include the exact task ID, for example: APPROVE 123."
+        );
+        res.status(200).send("<Response></Response>");
+        return;
+      }
+
+      const gate = await getLegacyWorkerRuntimeGate();
+      if (!gate.allowed) {
+        await sendSMS(from, `[Robur AI] Approval blocked: ${gate.reason}.`);
+        res.status(200).send("<Response></Response>");
+        return;
+      }
+
+      const task = await getTaskById(Number(match[1]));
+      if (task?.status === "awaiting_approval") {
         await updateTask(task.id, { status: "pending" }); // Move back to pending for execution
-        await sendSMS(from, `[Robur AI] Task #${task.id} APPROVED: "${task.description.substring(0, 80)}". Will execute shortly.`);
+        await sendSMS(
+          from,
+          `[Robur AI] Task #${task.id} APPROVED: "${task.description.substring(0, 80)}". Will execute shortly.`
+        );
 
         await logExecution({
           taskId: task.id,
           actionType: "approval_granted",
-          details: { approvedBy: from },
+          details: { approvedBy: "verified_owner", taskId: task.id },
           outcome: "success",
         });
       } else {
-        await sendSMS(from, "[Robur AI] No tasks awaiting approval.");
+        await sendSMS(
+          from,
+          `[Robur AI] Task #${match[1]} is not awaiting approval.`
+        );
       }
 
       res.status(200).send("<Response></Response>");
       return;
     }
 
-    // REJECT — reject the most recent pending approval task
-    if (upperMessage === "REJECT" || upperMessage.startsWith("REJECT")) {
-      const awaitingTasks = await getTasksByStatus("awaiting_approval", 1);
-      if (awaitingTasks.length > 0) {
-        const task = awaitingTasks[0];
-        await updateTask(task.id, { status: "cancelled", resultSummary: "Rejected by user via SMS" });
-        await sendSMS(from, `[Robur AI] Task #${task.id} REJECTED and cancelled.`);
+    // REJECT <id> — rejection remains available while paused.
+    if (upperMessage === "REJECT" || upperMessage.startsWith("REJECT ")) {
+      const match = /^REJECT\s+#?(\d+)$/.exec(upperMessage);
+      if (!match) {
+        await sendSMS(
+          from,
+          "[Robur AI] Include the exact task ID, for example: REJECT 123."
+        );
+        res.status(200).send("<Response></Response>");
+        return;
+      }
+
+      const task = await getTaskById(Number(match[1]));
+      if (task?.status === "awaiting_approval") {
+        await updateTask(task.id, {
+          status: "cancelled",
+          resultSummary: "Rejected by user via SMS",
+        });
+        await sendSMS(
+          from,
+          `[Robur AI] Task #${task.id} REJECTED and cancelled.`
+        );
 
         await logExecution({
           taskId: task.id,
           actionType: "approval_rejected",
-          details: { rejectedBy: from },
+          details: { rejectedBy: "verified_owner", taskId: task.id },
           outcome: "success",
         });
       } else {
-        await sendSMS(from, "[Robur AI] No tasks awaiting approval.");
+        await sendSMS(
+          from,
+          `[Robur AI] Task #${match[1]} is not awaiting approval.`
+        );
       }
 
       res.status(200).send("<Response></Response>");
@@ -107,18 +180,27 @@ export async function smsWebhookHandler(req: Request, res: Response) {
 
     // STATUS — get system status
     if (upperMessage === "STATUS") {
-      const status = await getConfig("system_status") || "unknown";
-      const killSwitch = await getConfig("kill_switch_active") || "false";
-      await sendSMS(from, `[Robur AI] Status: ${status} | Kill switch: ${killSwitch === "true" ? "ACTIVE" : "off"}`);
+      const status = (await getConfig("system_status")) || "unknown";
+      const gate = await getLegacyWorkerRuntimeGate();
+      await sendSMS(
+        from,
+        `[Robur AI] Status: ${status} | Autonomous execution: ${gate.allowed ? "ENABLED" : "BLOCKED"}`
+      );
       res.status(200).send("<Response></Response>");
       return;
     }
 
     // Unknown command
-    await sendSMS(from, "[Robur AI] Commands: STOP (pause all), START (resume), APPROVE, REJECT, STATUS");
+    await sendSMS(
+      from,
+      "[Robur AI] Commands: STOP, START, APPROVE <task ID>, REJECT <task ID>, STATUS"
+    );
     res.status(200).send("<Response></Response>");
   } catch (error: any) {
-    console.error("[SMS Webhook] Error:", error);
-    res.status(200).send("<Response></Response>"); // Always 200 for Twilio
+    console.error(
+      "[SMS Webhook] Verified request failed:",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    res.status(500).send("<Response></Response>");
   }
 }

@@ -87,13 +87,13 @@ describe("Self-Improver Weights", () => {
 describe("Retell AI Integration", () => {
   it("should format call params correctly", () => {
     const params = {
-      agent_id: "agent_7f02eb1896dd1e6deb38e54942",
-      to_number: "+61495007200",
-      from_number: "+61400000000",
+      agent_id: "agent_test123456789",
+      to_number: "+10000000000",
+      from_number: "+10000000001",
       metadata: { briefing_type: "morning" },
     };
     expect(params.agent_id).toMatch(/^agent_/);
-    expect(params.to_number).toMatch(/^\+61/);
+    expect(params.to_number).toMatch(/^\+/);
     expect(params.from_number).toMatch(/^\+/);
     expect(params.metadata.briefing_type).toMatch(/^(morning|evening)$/);
   });

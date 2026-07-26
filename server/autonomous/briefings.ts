@@ -1,9 +1,10 @@
 import { invokeLLM } from "../_core/llm";
 import {
   getActiveGoals, getTasksByStatus, getRecentTasks, getRecentMetrics,
-  getOpportunities, isKillSwitchActive, logExecution, getConfig
+  getOpportunities, logExecution, getConfig
 } from "../db";
 import { makeBriefingCall } from "../integrations/retell";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
  * Morning Briefing — 8:00am AWST (00:00 UTC)
@@ -11,8 +12,9 @@ import { makeBriefingCall } from "../integrations/retell";
  */
 export async function runMorningBriefing(): Promise<{ success: boolean; error?: string }> {
   try {
-    if (await isKillSwitchActive()) {
-      return { success: false, error: "Kill switch is active" };
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      return { success: false, error: gate.reason || "Legacy worker is unavailable" };
     }
 
     // Gather data for briefing
@@ -25,10 +27,7 @@ export async function runMorningBriefing(): Promise<{ success: boolean; error?: 
     const response = await invokeLLM({
       model: "gpt-5-mini",
       messages: [
-        {
-          role: "system",
-          content: `You are preparing a morning briefing for Michael T, General Manager of Robur Resources (scrap metal business, Perth WA). The briefing will be delivered by Addison, an AI voice assistant. Keep it concise (under 2 minutes when spoken), focused on priorities and actionable items. Use a warm, professional Australian tone.`
-        },
+                { role: "system", content: `You are preparing a morning briefing for the business owner. The briefing will be delivered by an AI voice assistant. Keep it concise (under 2 minutes when spoken), focused on priorities and actionable items. Use a warm, professional tone.` },
         {
           role: "user",
           content: `Prepare a morning briefing with this data:
@@ -79,8 +78,9 @@ Generate a natural, conversational briefing script for Addison to deliver.`
  */
 export async function runEveningBriefing(): Promise<{ success: boolean; error?: string }> {
   try {
-    if (await isKillSwitchActive()) {
-      return { success: false, error: "Kill switch is active" };
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      return { success: false, error: gate.reason || "Legacy worker is unavailable" };
     }
 
     // Gather data for briefing
@@ -93,10 +93,7 @@ export async function runEveningBriefing(): Promise<{ success: boolean; error?: 
     const response = await invokeLLM({
       model: "gpt-5-mini",
       messages: [
-        {
-          role: "system",
-          content: `You are preparing an evening summary briefing for Michael T, General Manager of Robur Resources. The briefing will be delivered by Addison. Keep it concise (under 2 minutes spoken), summarize accomplishments, flag any issues, and preview tomorrow's priorities. Warm, professional Australian tone.`
-        },
+                { role: "system", content: `You are preparing an evening summary briefing for the business owner. The briefing will be delivered by an AI voice assistant. Keep it concise (under 2 minutes spoken), summarize accomplishments, flag any issues, and preview tomorrow's priorities. Warm, professional tone.` },
         {
           role: "user",
           content: `Prepare an evening briefing:

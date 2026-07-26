@@ -19,6 +19,10 @@ import {
   eveningBriefingHandler,
 } from "../scheduled/handlers";
 import { smsWebhookHandler } from "../scheduled/smsWebhook";
+import {
+  enforceLegacyWorkerRetirement,
+  getLegacyWorkerRuntimeGate,
+} from "../safety/legacyWorkerGate";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -42,6 +46,13 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+
+  const startupGate = await enforceLegacyWorkerRetirement();
+  console.log(
+    startupGate.allowed
+      ? "[Safety] Legacy worker environment enabled; persisted owner authorization still controls execution"
+      : "[Safety] Legacy worker is retired/paused"
+  );
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -61,8 +72,15 @@ async function startServer() {
   app.post("/api/webhooks/sms", smsWebhookHandler);
 
   // ─── Health Check ─────────────────────────────────────────────────────────
-  app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString(), service: "robur-autonomous-worker" });
+  app.get("/api/health", async (_req, res) => {
+    const gate = await getLegacyWorkerRuntimeGate();
+    res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      service: "robur-autonomous-worker",
+      legacyWorkerStatus: gate.allowed ? "enabled" : "retired_or_paused",
+      autonomousExecution: gate.allowed,
+    });
   });
 
   // tRPC API

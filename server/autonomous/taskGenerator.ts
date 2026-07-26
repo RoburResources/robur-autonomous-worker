@@ -1,5 +1,6 @@
 import { invokeLLM } from "../_core/llm";
-import { getActiveGoals, createTask, getConfig, getAllConfig, isKillSwitchActive, getRecentTasks, logExecution } from "../db";
+import { getActiveGoals, createTask, getConfig, getAllConfig, getRecentTasks, logExecution } from "../db";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
  * Task Generator — runs every 15 minutes
@@ -14,8 +15,9 @@ import { getActiveGoals, createTask, getConfig, getAllConfig, isKillSwitchActive
 export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?: string }> {
   try {
     // Safety check
-    if (await isKillSwitchActive()) {
-      return { tasksCreated: 0, error: "Kill switch is active — system paused" };
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      return { tasksCreated: 0, error: gate.reason || "Legacy worker is unavailable" };
     }
 
     const activeGoals = await getActiveGoals();
@@ -57,7 +59,7 @@ export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?
       messages: [
         {
           role: "system",
-          content: `You are the autonomous business operations AI for Robur Resources (ABN 62 699 058 001), a scrap metal collection and recycling company in Perth, Western Australia. Owner: Michael T (Tarz), +61 495 007 200.
+          content: `You are an autonomous business operations AI.
 
 OPERATING PRINCIPLES:
 ${constitution}
@@ -65,15 +67,14 @@ ${constitution}
 SAFETY RULES:
 ${safetyRules}
 
-STRATEGIC CONTEXT (Scrap Metal):
+STRATEGIC CONTEXT:
 ${scrapStrategy}
 
 TOP REVENUE STRATEGIES:
 ${topStrategies}
 
 CURRENT RESTRICTIONS:
-- External contact restriction active until 2026-07-12: ${isRestrictionActive ? "YES - all outbound calls/emails/SMS to non-Michael numbers require approval" : "NO"}
-- System is currently PAUSED - only generate tasks, do not execute
+- External contact restriction active: ${isRestrictionActive ? "YES - all outbound calls/emails/SMS require approval" : "NO"}
 
 TASK GENERATION RULES:
 1. Generate EXACTLY ${maxTasksPerCycle} tasks maximum per cycle
@@ -83,10 +84,6 @@ TASK GENERATION RULES:
 5. Tasks must have clear, specific actions — not vague goals
 6. Include dependency info if the task requires something else to be done first
 7. Avoid duplicating tasks already in the queue
-
-Key suppliers: Pinwreck (Kenwick - Tyre Wire), Zenon Recycle (Canning Vale - Tyre Wire), Owens For Scrap (Neerabup - HMS), Shine Auto Parts (Kenwick)
-Key buyers: Allied Metal (HMS $330/t, Tyre Wire $125/t), CD Dodd (Forrestfield), Sims Metal (Malaga)
-Export targets: Reliance Scrap Trading, Point Global Commodities, Moinuddin Corporation (Bangladesh - USD $450/MT CFR)
 
 Respond in JSON format with an array of task objects.`
         },
