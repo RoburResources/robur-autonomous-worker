@@ -156,6 +156,8 @@ Respond in JSON format with an array of task objects.`
     for (const task of tasks) {
       const actionType = validActionTypes.includes(task.actionType) ? task.actionType : "web_research";
 
+      // dag_dependencies stores numeric task IDs for DAG-aware execution
+      // dependencies stores string labels for human readability
       await createTask({
         goalId: task.goalId,
         source: "task_generator",
@@ -170,7 +172,9 @@ Respond in JSON format with an array of task objects.`
           phase: task.phase,
           requiresExternalContact: task.requiresExternalContact,
           dependencies: task.dependencies || [],
+          dag_dependencies: [],  // numeric task IDs — populated when explicit task dependencies are known
           category: task.category,
+          generated_at: new Date().toISOString(),
         }),
       });
       created++;

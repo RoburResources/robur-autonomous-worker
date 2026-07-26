@@ -30,3 +30,15 @@
 - [x] Update task executor to gate outbound_call/send_email/send_sms with approval request
 - [x] Store restriction rule in system_config with expiry date
 - [x] Create task for Addison to call Michael back re: voice issues discussed
+
+## Zero-Mistake Architecture Upgrades
+
+- [x] Pre-mortem pre-flight: LLM generates top 3 failure modes before every task execution
+- [x] Confidence-gated execution: tasks below 0.85 confidence auto-escalate to human review via SMS
+- [x] Dual-agent verification: independent LLM-as-Judge verifies every completed task outcome
+- [x] Dependency graph (DAG): replace flat priority queue with DAG-based execution engine
+- [x] Formal output schema validation: JSON schema contracts validated before/after every action
+- [x] Canary execution: synthetic data dry-run before real execution for external-contact tasks
+- [x] DB schema: confidence_score, premortem_risks, verification_result, dag_dependencies stored in metadata JSON (no migration needed)
+- [x] Tests: 24 new vitest tests for all 6 modules (46 total passing)
+- [ ] Checkpoint and redeploy with all upgrades live
