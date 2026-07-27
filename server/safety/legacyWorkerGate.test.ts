@@ -91,6 +91,11 @@ describe("legacy worker safety gate", () => {
   });
 
   it("overrides stale active state during retired startup", async () => {
+    // Explicitly clear all env vars so the environment gate sees a retired state
+    vi.stubEnv("LEGACY_WORKER_ENABLED", "");
+    vi.stubEnv("LEGACY_WORKER_RISK_ACK", "");
+    vi.stubEnv("OWNER_OPEN_ID", "");
+    vi.stubEnv("OWNER_PHONE_E164", "");
     await enforceLegacyWorkerRetirement();
 
     expect(dbMocks.setConfig).toHaveBeenCalledWith(
