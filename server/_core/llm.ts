@@ -412,6 +412,11 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
   if (!response.ok) {
     const errorText = await response.text();
+    // Specific handling for Manus Forge usage exhaustion (412)
+    if (response.status === 412 && errorText.includes("usage exhausted")) {
+      console.error("[LLM] Manus Forge account usage exhausted — LLM calls will fail until quota resets");
+      throw new Error(`LLM_USAGE_EXHAUSTED: ${errorText}`);
+    }
     throw new Error(
       `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
     );

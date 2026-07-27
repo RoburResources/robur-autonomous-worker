@@ -222,6 +222,11 @@ Respond in JSON format with an array of task objects.`
 
     return { tasksCreated: created };
   } catch (error: any) {
+    const isUsageExhausted = error.message?.includes("LLM_USAGE_EXHAUSTED");
+    if (isUsageExhausted) {
+      console.warn("[TaskGenerator] Skipping cycle — Manus Forge LLM quota exhausted. Will retry next cycle.");
+      return { tasksCreated: 0, error: "LLM quota exhausted — skipping cycle" };
+    }
     await logExecution({
       actionType: "task_generation",
       details: { error: error.message },

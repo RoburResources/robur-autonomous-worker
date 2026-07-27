@@ -64,3 +64,16 @@
 - [x] Integrate A/B variant assignment into executor and store variant in task metadata
 - [x] Record variant outcomes via recordVariantOutcome after each task
 - [x] Fix RETIRED lock: env vars set, deploy to unlock
+
+## Fix Loop — Autonomous Diagnostic Issues
+
+- [x] Fix approval gate: 152 tasks stuck in awaiting_approval — gate expired 2026-07-12, tasks need to be reset to pending
+- [x] Fix approval gate logic: web_research and data_entry tasks should NOT require approval (internal tasks only)
+- [x] Fix task_generation_model config: "gpt-5-mini" is not a valid model — update to "gpt-4o-mini"
+- [x] Fix LLM fallback: add graceful degradation when Forge LLM returns 412 usage exhausted
+- [x] Fix failed tasks: retry pre-flight blocked tasks that have resolvable dependencies
+- [x] Verify Retell voice config: confirm Addison uses openai-Amy not ElevenLabs custom voice
+
+## Notes on Dependency-Blocked Tasks
+
+Tasks with unmet dependencies (robur_os_backend, xero_integration, twilio_webhook_configured, etc.) are correctly in PENDING status. They will be skipped by the DAG engine each cycle until their dependency config keys are set to "complete" or "true" in system_config. These are intentional infrastructure prerequisites — not bugs. The fix was to stop marking them as FAILED and instead keep them PENDING for automatic retry.

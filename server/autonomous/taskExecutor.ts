@@ -3,7 +3,7 @@ import {
   getDagReadyTask, checkDagReadiness, unlockDependents
 } from "./dagEngine";
 import {
-  getConfig, isKillSwitchActive, getDailyCallCount, getDailyEmailCount,
+  getConfig, setConfig, isKillSwitchActive, getDailyCallCount, getDailyEmailCount,
   upsertDailyMetrics, getTodayMetrics, updateTask, logExecution
 } from "../db";
 import { makeOutboundCall } from "../integrations/retell";
@@ -35,6 +35,7 @@ import { getActiveExperiment, assignVariant, recordVariantOutcome } from "./abTe
  * 12. Unlock DAG dependents on success
  */
 export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: number; error?: string }> {
+  let currentTaskId: number | undefined;
   try {
     // ── 1. Kill switch + API spend ────────────────────────────────────────────
     if (await isKillSwitchActive()) {
@@ -52,6 +53,7 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     if (!task) {
       return { executed: false, error: "No DAG-ready pending tasks" };
     }
+    currentTaskId = task.id;
 
     // ── 3. Input schema validation ────────────────────────────────────────────
     const inputValidation = validateTaskInput(task);
@@ -73,6 +75,23 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     // ── 4. Pre-flight validation ──────────────────────────────────────────────
     const preflight = await runPreflightValidation(task);
     if (!preflight.canExecute) {
+      // Unmet dependencies: leave task PENDING so it retries when deps resolve
+      // Missing credentials: leave PENDING so it retries when creds are added
+      // Only hard failures (invalid input, config errors) should mark as failed
+      const isRetryable = preflight.blockedReason?.includes("Unmet dependencies") ||
+        preflight.blockedReason?.includes("Task blocked:") ||
+        preflight.missingCredentials && preflight.missingCredentials.length > 0;
+      if (isRetryable) {
+        // Keep as pending — will be skipped by DAG engine and retried next cycle
+        await logExecution({
+          taskId: task.id,
+          actionType: "preflight_blocked",
+          details: { reason: preflight.blockedReason, missing: preflight.missingCredentials, retryable: true },
+          outcome: "pending",
+          errorMessage: preflight.blockedReason,
+        });
+        return { executed: false, taskId: task.id, error: `Pre-flight (retryable): ${preflight.blockedReason}` };
+      }
       await updateTask(task.id, {
         status: "failed",
         resultSummary: `Pre-flight blocked: ${preflight.blockedReason}`,
@@ -90,7 +109,13 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     // ── 5. External contact approval gate ────────────────────────────────────
     const externalContactRequired = await getConfig("external_contact_approval_required");
     const restrictionExpiry = await getConfig("external_contact_restriction_expiry");
-    const isRestrictionActive = externalContactRequired === "true" &&
+    // Auto-clear expired restriction
+    const restrictionExpired = restrictionExpiry && new Date(restrictionExpiry) <= new Date();
+    if (externalContactRequired === "true" && restrictionExpired) {
+      await setConfig("external_contact_approval_required", "false", "Auto-cleared: restriction expiry date passed");
+      console.log("[Executor] External contact restriction auto-cleared (expired)");
+    }
+    const isRestrictionActive = externalContactRequired === "true" && !restrictionExpired &&
       (!restrictionExpiry || new Date(restrictionExpiry) > new Date());
 
     if (isRestrictionActive) {
@@ -331,6 +356,15 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
 
     return { executed: true, taskId: task.id };
   } catch (error: any) {
+    const isUsageExhausted = error.message?.includes("LLM_USAGE_EXHAUSTED");
+    if (isUsageExhausted) {
+      console.warn("[TaskExecutor] Skipping task — Manus Forge LLM quota exhausted. Will retry next cycle.");
+      // Reset task to pending so it retries next cycle
+      if (currentTaskId) {
+        await updateTask(currentTaskId, { status: "pending" }).catch(() => {});
+      }
+      return { executed: false, error: "LLM quota exhausted — task reset to pending" };
+    }
     await logExecution({
       actionType: "task_execution",
       details: { error: error.message },
