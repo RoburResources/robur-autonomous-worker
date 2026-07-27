@@ -1,4 +1,4 @@
-import { eq, desc, asc, and, sql, gte, lte } from "drizzle-orm";
+import { eq, desc, asc, and, sql, gte, lte, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createHash } from "node:crypto";
 import {
@@ -242,6 +242,55 @@ export async function claimInboundSms(messageSid: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+/**
+ * Atomically claims one scheduler job/time slot across every live instance.
+ * Railway can briefly run old and new instances together during a deployment,
+ * so process-local timers alone cannot prevent a duplicate cycle.
+ */
+export async function claimPrivateCandidateJobSlot(
+  job: "task-generator" | "task-executor" | "evaluator" | "self-improver",
+  slot: string
+): Promise<boolean> {
+  if (!/^\d{4}-\d{2}-\d{2}(?:T\d{2}(?::\d{2})?)?$/.test(slot)) {
+    return false;
+  }
+
+  const db = await getDb();
+  if (!db) return false;
+
+  const digest = createHash("sha256")
+    .update(`${job}:${slot}`, "utf8")
+    .digest("hex");
+
+  try {
+    await db.insert(systemConfig).values({
+      key: `private_scheduler_claim_${digest}`,
+      value: `${job}:${slot}`,
+      description: "Distributed private-candidate scheduler slot claim",
+    });
+  } catch (error) {
+    const mysqlError = error as { code?: string; errno?: number };
+    if (mysqlError.code === "ER_DUP_ENTRY" || mysqlError.errno === 1062) {
+      return false;
+    }
+    throw error;
+  }
+
+  const retentionCutoff = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  await db
+    .delete(systemConfig)
+    .where(
+      and(
+        like(systemConfig.key, "private_scheduler_claim_%"),
+        lte(systemConfig.updatedAt, retentionCutoff)
+      )
+    )
+    .catch(error => {
+      console.warn("[Database] Scheduler-claim retention cleanup failed:", error);
+    });
+  return true;
 }
 
 // ─── Daily Metrics Helpers ──────────────────────────────────────────────────

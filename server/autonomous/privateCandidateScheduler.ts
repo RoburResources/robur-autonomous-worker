@@ -4,7 +4,7 @@ import { runTaskExecutor } from "./taskExecutor";
 import { runTaskGenerator } from "./taskGenerator";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 import { privateCandidateInternalAutonomyEnabled } from "../safety/privateCandidatePolicy";
-import { logExecution } from "../db";
+import { claimPrivateCandidateJobSlot, logExecution } from "../db";
 
 export type PrivateCandidateJob =
   | "task-generator"
@@ -68,6 +68,12 @@ export async function runPrivateCandidateSchedulerTick(
       const slot = slotFor(job, now);
       if (lastRunSlots.get(job) === slot) continue;
       lastRunSlots.set(job, slot);
+      if (!(await claimPrivateCandidateJobSlot(job, slot))) {
+        console.log(
+          `[Private Candidate] Skipped already-claimed ${job} slot ${slot}`
+        );
+        continue;
+      }
       try {
         await runJob(job);
         console.log(`[Private Candidate] Completed internal ${job} cycle`);
