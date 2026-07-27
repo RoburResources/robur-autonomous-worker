@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { NextFunction, Request, Response } from "express";
 import {
+  blockPrivateCandidateProviderIngress,
   isPrivateCandidateInternalAction,
   isPrivateCandidateInternalOnly,
   privateCandidateInternalAutonomyEnabled,
@@ -30,5 +32,43 @@ describe("private candidate policy", () => {
 
   it("fails closed when internal-only mode is absent", () => {
     expect(isPrivateCandidateInternalOnly({})).toBe(false);
+  });
+
+  it("blocks the entire provider webhook tree in private-only mode", () => {
+    vi.stubEnv("PRIVATE_CANDIDATE_INTERNAL_ONLY", "true");
+    const next = vi.fn() as NextFunction;
+    const response = {
+      status: vi.fn(),
+      json: vi.fn(),
+    };
+    response.status.mockReturnValue(response);
+    response.json.mockReturnValue(response);
+
+    blockPrivateCandidateProviderIngress(
+      {} as Request,
+      response as unknown as Response,
+      next
+    );
+
+    expect(response.status).toHaveBeenCalledWith(403);
+    expect(response.json).toHaveBeenCalledWith({
+      error: "Provider webhooks disabled in private candidate",
+    });
+    expect(next).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it("leaves the provider webhook tree available outside private-only mode", () => {
+    vi.stubEnv("PRIVATE_CANDIDATE_INTERNAL_ONLY", "false");
+    const next = vi.fn() as NextFunction;
+
+    blockPrivateCandidateProviderIngress(
+      {} as Request,
+      {} as Response,
+      next
+    );
+
+    expect(next).toHaveBeenCalledOnce();
+    vi.unstubAllEnvs();
   });
 });

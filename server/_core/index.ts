@@ -32,6 +32,7 @@ import {
   requireSameOriginMutation,
   securityHeaders,
 } from "./httpSecurity";
+import { blockPrivateCandidateProviderIngress } from "../safety/privateCandidatePolicy";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -100,6 +101,7 @@ async function startServer() {
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
   app.use("/api/trpc", requireSameOriginMutation);
+  app.use("/api/webhooks", blockPrivateCandidateProviderIngress);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
 
