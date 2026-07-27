@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const outcomeColors: Record<string, string> = {
   success: "bg-green-500/10 text-green-600 border-green-500/20",
@@ -12,17 +14,71 @@ const outcomeColors: Record<string, string> = {
 };
 
 export default function ExecutionLog() {
-  const { data: executions, isLoading } = trpc.executions.list.useQuery({ limit: 100 });
+  const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
+  const { data: executions, isLoading } = trpc.executions.list.useQuery({ limit: 200 });
 
   if (isLoading) {
     return <div className="space-y-4">{[1, 2, 3].map(i => <Skeleton key={i} className="h-16" />)}</div>;
   }
+
+  const allExecs = executions || [];
+  const successCount = allExecs.filter(e => e.outcome === "success").length;
+  const failureCount = allExecs.filter(e => e.outcome === "failure").length;
+  const pendingCount = allExecs.filter(e => e.outcome === "pending").length;
+
+  const filtered = outcomeFilter === "all"
+    ? allExecs
+    : allExecs.filter(e => e.outcome === outcomeFilter);
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Full audit trail of every action taken by the autonomous system.
       </p>
+
+      {/* Summary stats */}
+      <div className="grid grid-cols-3 gap-3">
+        <Card className="border-green-500/20 bg-green-500/5">
+          <CardHeader className="pb-1 pt-3 px-4">
+            <CardTitle className="text-xs text-muted-foreground">Successful</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            <p className="text-2xl font-bold text-green-600">{successCount}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-red-500/20 bg-red-500/5">
+          <CardHeader className="pb-1 pt-3 px-4">
+            <CardTitle className="text-xs text-muted-foreground">Failed</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            <p className="text-2xl font-bold text-red-600">{failureCount}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-blue-500/20 bg-blue-500/5">
+          <CardHeader className="pb-1 pt-3 px-4">
+            <CardTitle className="text-xs text-muted-foreground">Pending / Gated</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            <p className="text-2xl font-bold text-blue-600">{pendingCount}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Filter */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground">Filter:</span>
+        <Select value={outcomeFilter} onValueChange={setOutcomeFilter}>
+          <SelectTrigger className="w-36 h-8 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All ({allExecs.length})</SelectItem>
+            <SelectItem value="success">Success ({successCount})</SelectItem>
+            <SelectItem value="failure">Failure ({failureCount})</SelectItem>
+            <SelectItem value="pending">Pending ({pendingCount})</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
 
       <Card>
         <CardContent className="p-0">
@@ -39,14 +95,14 @@ export default function ExecutionLog() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {!executions || executions.length === 0 ? (
+              {filtered.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                     No executions logged yet
                   </TableCell>
                 </TableRow>
               ) : (
-                executions.map(exec => (
+                filtered.map(exec => (
                   <TableRow key={exec.id}>
                     <TableCell className="font-mono text-xs">{exec.id}</TableCell>
                     <TableCell>

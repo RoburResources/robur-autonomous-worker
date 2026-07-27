@@ -63,7 +63,7 @@ Rules:
 
   try {
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "user",
@@ -201,7 +201,7 @@ Be conservative. If no task is a good match, return taskId: null.`;
 
   try {
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "user",

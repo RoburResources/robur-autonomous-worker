@@ -41,7 +41,7 @@ export async function runCanaryExecution(task: {
 
   try {
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "system",

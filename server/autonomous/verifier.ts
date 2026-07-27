@@ -28,7 +28,7 @@ export async function verifyTaskOutcome(task: {
 }): Promise<VerificationResult> {
   try {
     const response = await invokeLLM({
-      // Deliberately use a DIFFERENT model from the executor (which uses gpt-5-mini)
+      // Deliberately use a DIFFERENT model from the executor (which uses gpt-4o-mini)
       // to avoid same-model blind spots
       model: "claude-sonnet-4-6",
       messages: [

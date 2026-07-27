@@ -413,7 +413,7 @@ async function executeCall(task: any): Promise<{ success: boolean; summary: stri
 
   try {
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: "You are preparing a brief for the Addison AI voice agent to make a business call for Robur Resources (scrap metal company in Perth). Generate a concise call objective and key talking points." },
         { role: "user", content: `Task: ${task.description}\nGenerate a brief call script/objective for Addison.` }
@@ -484,7 +484,7 @@ async function executeEmail(task: any): Promise<{ success: boolean; summary: str
 
     // Generate email content with LLM
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: `You are drafting a professional business email for Robur Resources, a resource recovery and sustainable solutions company in Perth, WA. Keep it concise, professional, and action-oriented. Include a Subject: line at the top. Sign off as 'Michael T, General Manager, Robur Resources'.${memoryContext}` },
         { role: "user", content: `Draft an email for this task: ${task.description}` }
@@ -606,17 +606,27 @@ async function executeResearch(task: any): Promise<{ success: boolean; summary: 
       actionType: "web_research",
       entityId: (task.metadata as any)?.entityId,
     }).catch(() => "");
-
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: `You are a business research assistant for Robur Resources (resource recovery company in Perth, WA). Provide actionable research findings based on the task. Include specific names, contacts, and data points where possible. If you cannot find real data, clearly state what would need to be verified and how.${memoryContext}` },
-        { role: "user", content: `Research task: ${task.description}\n\nProvide findings and actionable next steps.` }
+        { role: "user", content: `Research task: ${task.description}\n\nProvide findings and actionable next steps. If you identify a specific business opportunity (new supplier, buyer, contract, or revenue stream), include a line starting with "OPPORTUNITY:" followed by a brief description and estimated value.` }
       ]
     });
-
     const rawFindings = response.choices[0]?.message?.content;
     const findings = typeof rawFindings === 'string' ? rawFindings : "No findings";
+
+    // Extract and log opportunities from research findings
+    const opportunityMatch = findings.match(/OPPORTUNITY:\s*(.+?)(?:\n|$)/i);
+    if (opportunityMatch) {
+      const { createOpportunity } = await import("../db");
+      await createOpportunity({
+        source: `task_${task.id}`,
+        description: opportunityMatch[1].trim(),
+        priority: "medium",
+        estimatedValue: String(task.estimatedValue || "0"),
+      }).catch(() => {});
+    }
 
     // Track A/B variant outcome for research approach test
     const researchExperiment = await getActiveExperiment("web_research").catch(() => null);
@@ -630,7 +640,6 @@ async function executeResearch(task: any): Promise<{ success: boolean; summary: 
         confidenceScore: 0.75,
       }).catch(() => {});
     }
-
     return { success: true, summary: `findings: ${findings.substring(0, 500)}` };
   } catch (error: any) {
     return { success: false, summary: `Research failed: ${error.message}` };
@@ -640,7 +649,7 @@ async function executeResearch(task: any): Promise<{ success: boolean; summary: 
 async function executeDataEntry(task: any): Promise<{ success: boolean; summary: string }> {
   try {
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: "You are a data processing assistant. Extract and structure the relevant information from the task description." },
         { role: "user", content: `Data entry task: ${task.description}` }

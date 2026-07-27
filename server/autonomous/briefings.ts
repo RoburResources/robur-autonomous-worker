@@ -25,7 +25,7 @@ export async function runMorningBriefing(): Promise<{ success: boolean; error?: 
 
     // Generate briefing content with LLM
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
                 { role: "system", content: `You are preparing a morning briefing for the business owner. The briefing will be delivered by an AI voice assistant. Keep it concise (under 2 minutes when spoken), focused on priorities and actionable items. Use a warm, professional tone.` },
         {
@@ -91,7 +91,7 @@ export async function runEveningBriefing(): Promise<{ success: boolean; error?: 
 
     // Generate briefing content
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
                 { role: "system", content: `You are preparing an evening summary briefing for the business owner. The briefing will be delivered by an AI voice assistant. Keep it concise (under 2 minutes spoken), summarize accomplishments, flag any issues, and preview tomorrow's priorities. Warm, professional tone.` },
         {

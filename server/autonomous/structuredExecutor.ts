@@ -26,7 +26,7 @@ export async function executeWebResearch(
 
   try {
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "user",
@@ -279,7 +279,7 @@ export async function executeCodeGeneration(
 
   try {
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "user",

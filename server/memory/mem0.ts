@@ -130,7 +130,7 @@ async function localMemorySearch(
   // Use LLM to rank by relevance to query
   try {
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "system",
