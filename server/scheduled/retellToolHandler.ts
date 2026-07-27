@@ -9,9 +9,25 @@
 
 import { Request, Response } from "express";
 import { createTask } from "../db";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
+import { isVerifiedRetellRequest } from "./retellWebhook";
 
 export async function retellCreateTaskHandler(req: Request, res: Response) {
   try {
+    if (!isVerifiedRetellRequest(req)) {
+      res.status(403).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const gate = await getLegacyWorkerRuntimeGate();
+    if (!gate.allowed) {
+      res.status(423).json({
+        error: "Autonomous worker is paused",
+        reason: gate.reason,
+      });
+      return;
+    }
+
     const { description, action_type, priority } = req.body?.args || req.body || {};
 
     if (!description || !action_type) {

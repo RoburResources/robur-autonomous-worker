@@ -35,10 +35,10 @@ export const appRouter = router({
 
   // ─── Goals ────────────────────────────────────────────────────────────────
   goals: router({
-    list: publicProcedure.query(async () => {
+    list: ownerProcedure.query(async () => {
       return getAllGoals();
     }),
-    active: publicProcedure.query(async () => {
+    active: ownerProcedure.query(async () => {
       return getActiveGoals();
     }),
     create: ownerProcedure
@@ -75,12 +75,12 @@ export const appRouter = router({
 
   // ─── Tasks ────────────────────────────────────────────────────────────────
   tasks: router({
-    list: publicProcedure
+    list: ownerProcedure
       .input(z.object({ limit: z.number().default(100) }).optional())
       .query(async ({ input }) => {
         return getRecentTasks(input?.limit || 100);
       }),
-    byStatus: publicProcedure
+    byStatus: ownerProcedure
       .input(z.object({
         status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled", "awaiting_approval"]),
         limit: z.number().default(50),
@@ -121,12 +121,12 @@ export const appRouter = router({
 
   // ─── Execution Log ────────────────────────────────────────────────────────
   executions: router({
-    list: publicProcedure
+    list: ownerProcedure
       .input(z.object({ limit: z.number().default(100) }).optional())
       .query(async ({ input }) => {
         return getRecentExecutions(input?.limit || 100);
       }),
-    forTask: publicProcedure
+    forTask: ownerProcedure
       .input(z.object({ taskId: z.number() }))
       .query(async ({ input }) => {
         return getExecutionsForTask(input.taskId);
@@ -135,7 +135,7 @@ export const appRouter = router({
 
   // ─── Evaluations ─────────────────────────────────────────────────────────
   evaluations: router({
-    list: publicProcedure
+    list: ownerProcedure
       .input(z.object({ limit: z.number().default(50) }).optional())
       .query(async ({ input }) => {
         return getRecentEvaluations(input?.limit || 50);
@@ -144,7 +144,7 @@ export const appRouter = router({
 
   // ─── Opportunities ────────────────────────────────────────────────────────
   opportunities: router({
-    list: publicProcedure
+    list: ownerProcedure
       .input(z.object({ limit: z.number().default(50) }).optional())
       .query(async ({ input }) => {
         return getOpportunities(input?.limit || 50);
@@ -202,10 +202,10 @@ export const appRouter = router({
 
   // ─── Dashboard / Metrics ──────────────────────────────────────────────────
   metrics: router({
-    today: publicProcedure.query(async () => {
+    today: ownerProcedure.query(async () => {
       return getTodayMetrics();
     }),
-    recent: publicProcedure
+    recent: ownerProcedure
       .input(z.object({ days: z.number().default(30) }).optional())
       .query(async ({ input }) => {
         return getRecentMetrics(input?.days || 30);
@@ -214,7 +214,7 @@ export const appRouter = router({
 
   // ─── System Health ────────────────────────────────────────────────────────
   health: router({
-    status: publicProcedure.query(async () => {
+    status: ownerProcedure.query(async () => {
       const environmentGate = getLegacyWorkerEnvironmentGate();
       const runtimeGate = await getLegacyWorkerRuntimeGate();
       const storedSystemStatus = await getConfig("system_status") || "unknown";

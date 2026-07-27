@@ -17,7 +17,7 @@ import { createTask, logExecution, getConfig } from "../db";
  * Verify the Retell webhook signature.
  * Retell signs requests with a shared secret in the Authorization header.
  */
-function isVerifiedRetellRequest(req: Request): boolean {
+export function isVerifiedRetellRequest(req: Request): boolean {
   const apiKey = process.env.RETELL_API_KEY;
   if (!apiKey) return false;
   const authHeader = req.headers["authorization"];
