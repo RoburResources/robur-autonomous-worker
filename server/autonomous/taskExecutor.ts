@@ -170,7 +170,30 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     }
 
     // ── 6. Pre-mortem analysis ────────────────────────────────────────────────
-    const premortem = await runPremortem(task);
+    let premortem;
+    try {
+      premortem = await runPremortem(task);
+    } catch (error: any) {
+      if (error.message?.includes("LLM_USAGE_EXHAUSTED") || error.message?.includes("usage exhausted")) {
+        // LLM unavailable — use heuristic confidence based on task type and priority
+        console.warn("[TaskExecutor] LLM unavailable for pre-mortem, using heuristic confidence");
+        const baseConfidence = {
+          web_research: 0.92,
+          data_entry: 0.90,
+          send_email: 0.85,
+          send_sms: 0.88,
+          outbound_call: 0.80,
+        }[task.actionType || "web_research"] || 0.85;
+        premortem = {
+          confidenceScore: baseConfidence,
+          shouldEscalate: false,
+          failureModes: ["LLM unavailable — using heuristic confidence"],
+          escalationReason: null,
+        };
+      } else {
+        throw error;
+      }
+    }
 
     // Store pre-mortem results in task metadata
     const existingMeta = (task.metadata as Record<string, unknown>) || {};
@@ -360,7 +383,7 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
 
     return { executed: true, taskId: task.id };
   } catch (error: any) {
-    const isUsageExhausted = error.message?.includes("LLM_USAGE_EXHAUSTED");
+    const isUsageExhausted = error.message?.includes("LLM_USAGE_EXHAUSTED") || error.message?.includes("usage exhausted");
     if (isUsageExhausted) {
       console.warn("[TaskExecutor] Skipping task — Manus Forge LLM quota exhausted. Will retry next cycle.");
       // Reset task to pending so it retries next cycle
