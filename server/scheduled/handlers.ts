@@ -21,7 +21,7 @@ async function authenticateCron(req: Request, res: Response): Promise<boolean> {
       return false;
     }
     return true;
-  } catch {
+  } catch (error) {
     res.status(403).json({ error: "Authentication failed" });
     return false;
   }
@@ -108,7 +108,7 @@ export async function evaluatorHandler(req: Request, res: Response) {
 }
 
 /**
- * Self-Improver — weekly Sunday
+ * Self-Improver — weekly Sunday at 10pm AWST (14:00 UTC)
  * POST /api/scheduled/self-improver
  */
 export async function selfImproverHandler(req: Request, res: Response) {
@@ -128,7 +128,7 @@ export async function selfImproverHandler(req: Request, res: Response) {
 }
 
 /**
- * Morning Briefing — 8:00am AWST (00:00 UTC)
+ * Morning Briefing — daily at 8am AWST (00:00 UTC)
  * POST /api/scheduled/morning-briefing
  */
 export async function morningBriefingHandler(req: Request, res: Response) {
@@ -148,7 +148,7 @@ export async function morningBriefingHandler(req: Request, res: Response) {
 }
 
 /**
- * Evening Briefing — 5:30pm AWST (09:30 UTC)
+ * Evening Briefing — daily at 5:30pm AWST (09:30 UTC)
  * POST /api/scheduled/evening-briefing
  */
 export async function eveningBriefingHandler(req: Request, res: Response) {
