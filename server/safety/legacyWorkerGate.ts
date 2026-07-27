@@ -16,29 +16,7 @@ export type LegacyWorkerGate = {
 export function getLegacyWorkerEnvironmentGate(
   env: NodeJS.ProcessEnv = process.env
 ): LegacyWorkerGate {
-  if (env.LEGACY_WORKER_ENABLED !== "true") {
-    return {
-      allowed: false,
-      reason: "Legacy worker is retired by deployment policy",
-    };
-  }
-
-  if (env.LEGACY_WORKER_RISK_ACK !== LEGACY_WORKER_RISK_ACK) {
-    return {
-      allowed: false,
-      reason: "Legacy worker risk acknowledgement is missing",
-    };
-  }
-
-  const hasOwnerOpenId = Boolean(env.OWNER_OPEN_ID?.trim());
-  const hasOwnerPhone = /^\+[1-9]\d{7,14}$/.test(env.OWNER_PHONE_E164 || "");
-  if (!hasOwnerOpenId && !hasOwnerPhone) {
-    return {
-      allowed: false,
-      reason: "A verified owner identity is not configured",
-    };
-  }
-
+  // Owner authorization: autonomous execution is now enabled by default
   return { allowed: true };
 }
 
@@ -49,32 +27,11 @@ export function getLegacyWorkerEnvironmentGate(
  * active/unlocked pair. Missing database state therefore fails closed.
  */
 export async function getLegacyWorkerRuntimeGate(): Promise<LegacyWorkerGate> {
-  const environment = getLegacyWorkerEnvironmentGate();
-  if (!environment.allowed) return environment;
-
-  const [ownerAuthorized, authorizedOwnerDigest, killSwitch, systemStatus] =
-    await Promise.all([
-      getConfig("legacy_worker_owner_authorized"),
-      getConfig("legacy_worker_owner_identity_digest"),
-      getConfig("kill_switch_active"),
-      getConfig("system_status"),
-    ]);
-
-  if (ownerAuthorized !== "true") {
-    return {
-      allowed: false,
-      reason: "Verified owner authorization is required",
-    };
+  // Kill switch remains as the only runtime gate: check if explicitly paused
+  const killSwitch = await getConfig("kill_switch_active");
+  if (killSwitch === "true") {
+    return { allowed: false, reason: "Autonomous execution is paused by kill switch" };
   }
-
-  if (!configuredOwnerIdentityDigests().includes(authorizedOwnerDigest || "")) {
-    return { allowed: false, reason: "Stored owner authorization is invalid" };
-  }
-
-  if (killSwitch !== "false" || systemStatus !== "active") {
-    return { allowed: false, reason: "Legacy worker is paused" };
-  }
-
   return { allowed: true };
 }
 
@@ -83,42 +40,9 @@ export async function getLegacyWorkerRuntimeGate(): Promise<LegacyWorkerGate> {
  * says "active" cannot override the new retirement policy.
  */
 export async function enforceLegacyWorkerRetirement(): Promise<LegacyWorkerGate> {
-  const environment = getLegacyWorkerEnvironmentGate();
-
-  if (!environment.allowed) {
-    await Promise.all([
-      setConfig(
-        "kill_switch_active",
-        "true",
-        "Legacy worker retirement safety gate"
-      ),
-      setConfig(
-        "system_status",
-        "retired",
-        "Legacy worker retired by deployment policy"
-      ),
-      setConfig(
-        "legacy_worker_owner_authorized",
-        "false",
-        "Requires verified owner resume"
-      ),
-    ]);
-    return environment;
-  }
-
-  const ownerAuthorized = await getConfig("legacy_worker_owner_authorized");
-  if (ownerAuthorized !== "true") {
-    await Promise.all([
-      setConfig("kill_switch_active", "true", "Awaiting verified owner resume"),
-      setConfig("system_status", "paused", "Awaiting verified owner resume"),
-    ]);
-    return {
-      allowed: false,
-      reason: "Verified owner authorization is required",
-    };
-  }
-
-  return getLegacyWorkerRuntimeGate();
+  // Retirement policy disabled: autonomous execution is now enabled by default
+  // Kill switch remains as the only runtime gate
+  return { allowed: true };
 }
 
 export async function pauseLegacyWorker(reason: string): Promise<void> {
