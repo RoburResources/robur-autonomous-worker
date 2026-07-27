@@ -19,6 +19,9 @@ import {
   eveningBriefingHandler,
 } from "../scheduled/handlers";
 import { smsWebhookHandler } from "../scheduled/smsWebhook";
+import { retellWebhookHandler } from "../scheduled/retellWebhook";
+import { addisonVoiceWebhookHandler } from "../scheduled/voiceWebhook";
+import { retellCreateTaskHandler } from "../scheduled/retellToolHandler";
 import {
   enforceLegacyWorkerRetirement,
   getLegacyWorkerRuntimeGate,
@@ -70,6 +73,9 @@ async function startServer() {
 
   // ─── Webhooks ─────────────────────────────────────────────────────────────
   app.post("/api/webhooks/sms", smsWebhookHandler);
+  app.post("/api/webhooks/retell", retellWebhookHandler);
+  app.post("/api/webhooks/voice/addison", addisonVoiceWebhookHandler);
+  app.post("/api/webhooks/retell/create-task", retellCreateTaskHandler);
 
   // ─── Health Check ─────────────────────────────────────────────────────────
   app.get("/api/health", async (_req, res) => {

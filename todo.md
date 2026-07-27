@@ -77,3 +77,13 @@
 ## Notes on Dependency-Blocked Tasks
 
 Tasks with unmet dependencies (robur_os_backend, xero_integration, twilio_webhook_configured, etc.) are correctly in PENDING status. They will be skipped by the DAG engine each cycle until their dependency config keys are set to "complete" or "true" in system_config. These are intentional infrastructure prerequisites — not bugs. The fix was to stop marking them as FAILED and instead keep them PENDING for automatic retry.
+
+## Conversational Addison — SMS + Phone
+
+- [x] Upgrade SMS webhook: add natural language task creation (LLM parses free-text instructions from Tarz, creates tasks, replies with confirmation)
+- [x] Add SMS commands: TASKS (list pending), DONE (list completed), ADDISON <instruction> (create task via NL)
+- [x] Build Retell webhook handler: POST /api/webhooks/retell/call-ended — captures call transcript, extracts instructions, creates tasks
+- [x] Add Retell custom tool: "create_task" — Addison can call this during a phone conversation to log tasks in real-time
+- [x] Link Addison's Twilio number (+61468061765) to Retell as inbound agent (via Retell dashboard — API blocked from sandbox region)
+- [x] Update Addison's LLM prompt: add task creation awareness and webhook URL (via Retell dashboard — API blocked from sandbox region)
+- [x] Wire Twilio voice URL to Retell SIP for inbound calls to +61468061765 (set to /api/webhooks/voice/addison which returns TwiML)

@@ -146,10 +146,14 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
       }
     }
 
-    // High-value approval gate (always active)
+    // High-value approval gate — only applies to external contact actions
+    // Internal tasks (web_research, data_entry) are never gated regardless of estimated value
+    // estimated_value represents revenue potential, not action cost
+    const externalContactActions = ["outbound_call", "send_email", "send_sms"];
+    const isExternalContactTask = externalContactActions.includes(task.actionType || "");
     const approvalThreshold = parseInt(await getConfig("approval_threshold_cents") || "50000");
     const estimatedValue = parseFloat(task.estimatedValue as string || "0") * 100;
-    if (estimatedValue > approvalThreshold) {
+    if (isExternalContactTask && estimatedValue > approvalThreshold) {
       await updateTask(task.id, { status: "awaiting_approval" });
       const userPhone = await getConfig("user_phone") || "+61495007200";
       await sendSMS(
