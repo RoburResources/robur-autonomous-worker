@@ -16,6 +16,10 @@ import { runCanaryExecution } from "./canaryExecution";
 import { getTaskContext, storeTaskOutcome, storeContactInteraction } from "../memory/mem0";
 import { sendEmail, parseEmailDraft, buildEmailTemplate, isSendGridConfigured } from "../integrations/sendgrid";
 import { getActiveExperiment, assignVariant, recordVariantOutcome } from "./abTesting";
+import {
+  isPrivateCandidateInternalAction,
+  isPrivateCandidateInternalOnly,
+} from "../safety/privateCandidatePolicy";
 
 /**
  * Task Executor — runs every 15 minutes.
@@ -54,6 +58,33 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
       return { executed: false, error: "No DAG-ready pending tasks" };
     }
     currentTaskId = task.id;
+
+    if (
+      isPrivateCandidateInternalOnly() &&
+      !isPrivateCandidateInternalAction(task.actionType)
+    ) {
+      await updateTask(task.id, {
+        status: "awaiting_approval",
+        resultSummary:
+          "Blocked by private-candidate internal-only containment policy",
+      });
+      await logExecution({
+        taskId: task.id,
+        actionType: "private_candidate_external_action_blocked",
+        details: {
+          requestedActionType: task.actionType,
+          containment: "internal-only",
+        },
+        outcome: "pending",
+        errorMessage:
+          "External action blocked by private-candidate containment policy",
+      });
+      return {
+        executed: false,
+        taskId: task.id,
+        error: "External action blocked by private-candidate policy",
+      };
+    }
 
     // ── 3. Input schema validation ────────────────────────────────────────────
     const inputValidation = validateTaskInput(task);

@@ -22,6 +22,7 @@ import { smsWebhookHandler } from "../scheduled/smsWebhook";
 import { retellWebhookHandler } from "../scheduled/retellWebhook";
 import { addisonVoiceWebhookHandler } from "../scheduled/voiceWebhook";
 import { retellCreateTaskHandler } from "../scheduled/retellToolHandler";
+import { startPrivateCandidateScheduler } from "../autonomous/privateCandidateScheduler";
 import {
   enforceLegacyWorkerRetirement,
   getLegacyWorkerRuntimeGate,
@@ -153,6 +154,7 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
+    startPrivateCandidateScheduler();
   });
 }
 
