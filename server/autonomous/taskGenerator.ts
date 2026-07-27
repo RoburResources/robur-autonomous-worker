@@ -1,6 +1,7 @@
 import { invokeLLM } from "../_core/llm";
 import { getActiveGoals, createTask, getConfig, getAllConfig, getRecentTasks, logExecution } from "../db";
 import { linkBatchDependencies } from "./dependencyLinker";
+import { searchMemories } from "../memory/mem0";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
@@ -50,6 +51,15 @@ export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?
     const isRestrictionActive = externalContactRequired === "true" &&
       (!restrictionExpiry || new Date(restrictionExpiry) > new Date());
 
+    // Load strategy insights from Mem0 memory for smarter task generation
+    const strategyMemories = await searchMemories("winning strategy approach best performance scrap metal", {
+      category: "strategy_insights",
+      limit: 4,
+    }).catch(() => []);
+    const memoryContext = strategyMemories.length > 0
+      ? `\n\nMEMORY INSIGHTS FROM PREVIOUS CYCLES:\n${strategyMemories.map(m => `- ${m.content}`).join('\n')}`
+      : "";
+
     // Build goal context
     const goalsContext = activeGoals.map(g =>
       `Goal [ID:${g.id}] (priority ${g.priority}): ${g.goalText}\nSub-goals: ${JSON.stringify(g.subGoals || [])}`
@@ -85,6 +95,7 @@ TASK GENERATION RULES:
 5. Tasks must have clear, specific actions — not vague goals
 6. Include dependency info if the task requires something else to be done first
 7. Avoid duplicating tasks already in the queue
+8. Use memory insights below to generate smarter, higher-ROI tasks${memoryContext}
 
 Respond in JSON format with an array of task objects.`
         },

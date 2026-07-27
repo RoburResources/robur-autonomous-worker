@@ -13,6 +13,9 @@ import { runPremortem } from "./premortem";
 import { verifyTaskOutcome } from "./verifier";
 import { validateTaskInput, validateTaskOutput } from "./schemaValidator";
 import { runCanaryExecution } from "./canaryExecution";
+import { getTaskContext, storeTaskOutcome, storeContactInteraction } from "../memory/mem0";
+import { sendEmail, parseEmailDraft, buildEmailTemplate, isSendGridConfigured } from "../integrations/sendgrid";
+import { getActiveExperiment, assignVariant, recordVariantOutcome } from "./abTesting";
 
 /**
  * Task Executor — runs every 15 minutes.
@@ -315,6 +318,17 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
       await upsertDailyMetrics(todayDate, { tasksFailed: 1 });
     }
 
+    // Store task outcome in Mem0 memory for future reference
+    await storeTaskOutcome({
+      taskId: task.id,
+      description: task.description,
+      actionType: task.actionType || "unknown",
+      outcome: result.success ? "success" : "failure",
+      resultSummary: result.summary.substring(0, 300),
+      confidence: premortem.confidenceScore,
+      executionTimeMs: durationMs,
+    }).catch((e: any) => console.warn("[Mem0] storeTaskOutcome failed:", e.message));
+
     return { executed: true, taskId: task.id };
   } catch (error: any) {
     await logExecution({
@@ -345,7 +359,14 @@ async function executeCall(task: any): Promise<{ success: boolean; summary: stri
       ]
     });
 
-    const callBrief = response.choices[0]?.message?.content as string || task.description;
+    // A/B variant assignment for call scripts
+    const callExperiment = await getActiveExperiment("outbound_call").catch(() => null);
+    const callVariant = callExperiment ? assignVariant(callExperiment, task.id) : null;
+    const callScript = callVariant?.content || null;
+
+    const rawCallBrief = response.choices[0]?.message?.content;
+    const callBrief = typeof rawCallBrief === 'string' ? rawCallBrief : task.description;
+    const finalCallBrief = callScript ? `${callScript}\n\nContext: ${callBrief}` : callBrief;
 
     const callResult = await makeOutboundCall({
       agentId: await getConfig("retell_agent_id") || "agent_7f02eb1896dd1e6deb38e54942",
@@ -356,7 +377,30 @@ async function executeCall(task: any): Promise<{ success: boolean; summary: stri
     const today = new Date().toISOString().split("T")[0];
     await upsertDailyMetrics(today, { callsMade: 1 });
 
-    return { success: true, summary: `Call initiated. Call ID: ${callResult.callId}. Objective: ${callBrief.substring(0, 200)}` };
+    // Track A/B variant outcome
+    if (callExperiment && callVariant) {
+      await recordVariantOutcome({
+        experimentId: callExperiment.id,
+        variantId: callVariant.id,
+        taskId: task.id,
+        success: true,
+        confidenceScore: 0.8,
+      }).catch(() => {});
+    }
+
+    // Store contact interaction in Mem0
+    const toNumber = (task.actionPayload as any)?.phoneNumber;
+    if (toNumber && toNumber !== await getConfig("user_phone")) {
+      await storeContactInteraction({
+        contactName: (task.metadata as any)?.contactName || toNumber,
+        contactType: "supplier",
+        channel: "phone",
+        outcome: "connected",
+        notes: finalCallBrief.substring(0, 200),
+      }).catch(() => {});
+    }
+
+    return { success: true, summary: `Call initiated. Call ID: ${callResult.callId}. Objective: ${finalCallBrief.substring(0, 200)}` };
   } catch (error: any) {
     return { success: false, summary: `Call failed: ${error.message}` };
   }
@@ -370,19 +414,96 @@ async function executeEmail(task: any): Promise<{ success: boolean; summary: str
   }
 
   try {
+    // Get memory context for better email personalisation
+    const memoryContext = await getTaskContext({
+      taskDescription: task.description,
+      actionType: "send_email",
+      entityId: (task.metadata as any)?.entityId,
+    }).catch(() => "");
+
+    // Generate email content with LLM
     const response = await invokeLLM({
       model: "gpt-5-mini",
       messages: [
-        { role: "system", content: "You are drafting a professional business email for Robur Resources, a resource recovery and sustainable solutions company in Perth, WA. Keep it concise, professional, and action-oriented. Sign off as 'Michael T, General Manager, Robur Resources'." },
+        { role: "system", content: `You are drafting a professional business email for Robur Resources, a resource recovery and sustainable solutions company in Perth, WA. Keep it concise, professional, and action-oriented. Include a Subject: line at the top. Sign off as 'Michael T, General Manager, Robur Resources'.${memoryContext}` },
         { role: "user", content: `Draft an email for this task: ${task.description}` }
       ]
     });
 
-    const emailDraft = response.choices[0]?.message?.content as string || "";
+    const rawDraft = response.choices[0]?.message?.content;
+    const emailDraft = typeof rawDraft === 'string' ? rawDraft : "";
+    const { subject, body } = parseEmailDraft(emailDraft);
+
+    // Get recipient from task metadata or action payload
+    const taskMeta = (task.metadata as any) || {};
+    const actionPayload = (task.actionPayload as any) || {};
+    const recipientEmail = actionPayload.email || taskMeta.recipientEmail || "";
+    const recipientName = actionPayload.name || taskMeta.recipientName;
+
+    // A/B variant assignment for email subjects
+    const emailExperiment = await getActiveExperiment("send_email").catch(() => null);
+    const emailVariant = emailExperiment ? assignVariant(emailExperiment, task.id) : null;
+    const abSubject = emailVariant?.content || subject;
+
+    // Use template system for HTML emails
+    const templateType = taskMeta.emailTemplate || "general_business";
+    const { bodyHtml } = buildEmailTemplate(templateType as any, body, recipientName);
+
+    let sendResult;
+    if (recipientEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      // Real recipient — send via SendGrid
+      sendResult = await sendEmail({
+        to: recipientEmail,
+        toName: recipientName,
+        subject: abSubject,
+        bodyText: body,
+        bodyHtml,
+        templateType: templateType as any,
+        metadata: { taskId: task.id, taskDescription: task.description },
+      });
+    } else {
+      // No recipient — draft mode
+      sendResult = {
+        success: true,
+        messageId: `draft_${Date.now()}`,
+        deliveryStatus: "draft" as const,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
     const today = new Date().toISOString().split("T")[0];
     await upsertDailyMetrics(today, { emailsSent: 1 });
 
-    return { success: true, summary: `emailDraft: ${emailDraft.substring(0, 400)}` };
+    // Track A/B variant outcome for email subject test
+    if (emailExperiment && emailVariant) {
+      await recordVariantOutcome({
+        experimentId: emailExperiment.id,
+        variantId: emailVariant.id,
+        taskId: task.id,
+        success: sendResult.success,
+        confidenceScore: sendResult.deliveryStatus === 'sent' ? 0.9 : 0.6,
+      }).catch(() => {});
+    }
+
+    // Store contact interaction in Mem0
+    if (recipientEmail) {
+      await storeContactInteraction({
+        contactName: recipientName || recipientEmail,
+        contactType: "supplier",
+        channel: "email",
+        outcome: sendResult.deliveryStatus === 'sent' ? 'connected' : 'not_interested',
+        notes: `Subject: ${abSubject}`,
+      }).catch(() => {});
+    }
+
+    const modeLabel = sendResult.deliveryStatus === 'sent' ? 'SENT' :
+      sendResult.deliveryStatus === 'draft' ? 'DRAFTED (no recipient configured)' : 'FAILED';
+    const sgLabel = isSendGridConfigured() ? 'via SendGrid' : 'draft mode (no SendGrid key)';
+
+    return {
+      success: sendResult.success,
+      summary: `recipient: ${recipientEmail || 'none'} | status: ${modeLabel} ${sgLabel} | messageId: ${sendResult.messageId || 'n/a'} | subject: ${abSubject} | body: ${body.substring(0, 200)}`
+    };
   } catch (error: any) {
     return { success: false, summary: `Email failed: ${error.message}` };
   }
@@ -398,6 +519,18 @@ async function executeSMS(task: any): Promise<{ success: boolean; summary: strin
     const today = new Date().toISOString().split("T")[0];
     await upsertDailyMetrics(today, { smsSent: 1 });
 
+    // Store contact interaction in Mem0 for non-owner SMS
+    const userPhone = await getConfig("user_phone") || "+61495007200";
+    if (toNumber !== userPhone) {
+      await storeContactInteraction({
+        contactName: (task.metadata as any)?.contactName || toNumber,
+        contactType: "supplier",
+        channel: "sms",
+        outcome: "connected",
+        notes: message.substring(0, 200),
+      }).catch(() => {});
+    }
+
     return { success: true, summary: `message: SMS sent to ${toNumber}: ${message.substring(0, 100)}` };
   } catch (error: any) {
     return { success: false, summary: `SMS failed: ${error.message}` };
@@ -406,15 +539,37 @@ async function executeSMS(task: any): Promise<{ success: boolean; summary: strin
 
 async function executeResearch(task: any): Promise<{ success: boolean; summary: string }> {
   try {
+    // Inject relevant memories from previous cycles
+    const memoryContext = await getTaskContext({
+      taskDescription: task.description,
+      actionType: "web_research",
+      entityId: (task.metadata as any)?.entityId,
+    }).catch(() => "");
+
     const response = await invokeLLM({
       model: "gpt-5-mini",
       messages: [
-        { role: "system", content: "You are a business research assistant for Robur Resources (resource recovery company in Perth, WA). Provide actionable research findings based on the task. Include specific names, contacts, and data points where possible. If you cannot find real data, clearly state what would need to be verified and how." },
+        { role: "system", content: `You are a business research assistant for Robur Resources (resource recovery company in Perth, WA). Provide actionable research findings based on the task. Include specific names, contacts, and data points where possible. If you cannot find real data, clearly state what would need to be verified and how.${memoryContext}` },
         { role: "user", content: `Research task: ${task.description}\n\nProvide findings and actionable next steps.` }
       ]
     });
 
-    const findings = response.choices[0]?.message?.content as string || "No findings";
+    const rawFindings = response.choices[0]?.message?.content;
+    const findings = typeof rawFindings === 'string' ? rawFindings : "No findings";
+
+    // Track A/B variant outcome for research approach test
+    const researchExperiment = await getActiveExperiment("web_research").catch(() => null);
+    if (researchExperiment) {
+      const researchVariant = assignVariant(researchExperiment, task.id);
+      await recordVariantOutcome({
+        experimentId: researchExperiment.id,
+        variantId: researchVariant.id,
+        taskId: task.id,
+        success: findings !== "No findings" && findings.length > 100,
+        confidenceScore: 0.75,
+      }).catch(() => {});
+    }
+
     return { success: true, summary: `findings: ${findings.substring(0, 500)}` };
   } catch (error: any) {
     return { success: false, summary: `Research failed: ${error.message}` };

@@ -42,3 +42,25 @@
 - [x] DB schema: confidence_score, premortem_risks, verification_result, dag_dependencies stored in metadata JSON (no migration needed)
 - [x] Tests: 24 new vitest tests for all 6 modules (46 total passing)
 - [x] Checkpoint and redeploy with all upgrades live
+
+## Autonomous Loop — Next Features
+
+- [x] Mem0 memory integration: persist learned patterns, supplier preferences, and lessons across cycles
+- [x] Mem0: store task outcomes as memories after each execution
+- [x] Mem0: inject relevant memories into task generator and executor prompts
+- [x] Mem0: supplier/contact preference tracking
+- [x] SendGrid real email delivery: replace draft-only with actual sent emails
+- [x] SendGrid: delivery tracking (sent, delivered, opened, bounced)
+- [x] SendGrid: email template system for different task types
+- [x] A/B testing framework: variant management for call scripts, email subjects, research approaches
+- [x] A/B testing: automatic winner detection after sufficient sample size
+- [x] A/B testing: results fed into self-improver
+
+## Gap Closure (pre-deploy)
+
+- [x] Wire Mem0 retrieval into taskGenerator prompts
+- [x] Call storeContactInteraction from call/email/sms result paths
+- [x] Use buildEmailTemplate in executeEmail
+- [x] Integrate A/B variant assignment into executor and store variant in task metadata
+- [x] Record variant outcomes via recordVariantOutcome after each task
+- [x] Fix RETIRED lock: env vars set, deploy to unlock
