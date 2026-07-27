@@ -240,11 +240,13 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     // ── 7. Confidence gate ────────────────────────────────────────────────────
     if (premortem.shouldEscalate) {
       await updateTask(task.id, { status: "awaiting_approval" });
-      const userPhone = await getConfig("user_phone") || "+61495007200";
-      await sendSMS(
-        userPhone,
-        `[Robur AI] LOW CONFIDENCE (${(premortem.confidenceScore * 100).toFixed(0)}%): "${task.description.substring(0, 100)}"\nReason: ${premortem.escalationReason}\nReply APPROVE to proceed or REJECT to cancel. Task #${task.id}`
-      );
+      if (!isPrivateCandidateInternalOnly()) {
+        const userPhone = await getConfig("user_phone") || "+61495007200";
+        await sendSMS(
+          userPhone,
+          `[Robur AI] LOW CONFIDENCE (${(premortem.confidenceScore * 100).toFixed(0)}%): "${task.description.substring(0, 100)}"\nReason: ${premortem.escalationReason}\nReply APPROVE to proceed or REJECT to cancel. Task #${task.id}`
+        );
+      }
       await logExecution({
         taskId: task.id,
         actionType: "confidence_gate_escalation",
@@ -252,6 +254,7 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
           confidenceScore: premortem.confidenceScore,
           escalationReason: premortem.escalationReason,
           failureModes: premortem.failureModes,
+          notificationSent: !isPrivateCandidateInternalOnly(),
         },
         outcome: "pending",
       });

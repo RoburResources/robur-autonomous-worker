@@ -32,9 +32,18 @@ class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
     console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
     if (!ENV.oAuthServerUrl) {
-      console.error(
-        "[OAuth] ERROR: OAUTH_SERVER_URL is not configured! Set OAUTH_SERVER_URL environment variable."
-      );
+      if (
+        process.env.PRIVATE_CANDIDATE_INTERNAL_ONLY === "true" &&
+        process.env.PRIVATE_CANDIDATE_INTERNAL_AUTONOMY === "true"
+      ) {
+        console.log(
+          "[OAuth] External OAuth intentionally disabled for SSH-only private candidate"
+        );
+      } else {
+        console.error(
+          "[OAuth] ERROR: OAUTH_SERVER_URL is not configured! Set OAUTH_SERVER_URL environment variable."
+        );
+      }
     }
   }
 
@@ -201,7 +210,6 @@ class SDKServer {
     cookieValue: string | undefined | null
   ): Promise<{ openId: string; appId: string; name: string } | null> {
     if (!cookieValue) {
-      console.warn("[Auth] Missing session cookie");
       return null;
     }
 

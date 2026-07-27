@@ -5,6 +5,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Request } from "express";
+import { isPrivateCandidateInternalOnly } from "../safety/privateCandidatePolicy";
 
 function getTwilioCredentials() {
   return {
@@ -21,6 +22,11 @@ export async function sendSMS(
   to: string,
   body: string
 ): Promise<{ sid: string; status: string }> {
+  if (isPrivateCandidateInternalOnly()) {
+    console.warn("[Twilio] SMS blocked by private-candidate containment");
+    return { sid: "blocked", status: "blocked_private_candidate" };
+  }
+
   const { accountSid, authToken, phoneNumber } = getTwilioCredentials();
 
   if (!accountSid || !authToken || !phoneNumber) {

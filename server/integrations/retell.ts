@@ -2,6 +2,7 @@
  * Retell AI Integration
  * Uses POST /v2/create-phone-call endpoint for outbound calls
  */
+import { isPrivateCandidateInternalOnly } from "../safety/privateCandidatePolicy";
 
 const RETELL_API_URL = "https://api.retellai.com";
 
@@ -30,6 +31,10 @@ export interface CallResult {
  * Uses POST /v2/create-phone-call (NOT Twilio SIP dial)
  */
 export async function makeOutboundCall(params: OutboundCallParams): Promise<CallResult> {
+  if (isPrivateCandidateInternalOnly()) {
+    throw new Error("Outbound call blocked by private-candidate containment");
+  }
+
   const apiKey = getRetellApiKey();
   if (!apiKey) {
     throw new Error("RETELL_API_KEY not configured");

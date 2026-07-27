@@ -11,6 +11,7 @@
  * - Unsubscribe management
  * - Rate limiting (respects max_emails_per_day config)
  */
+import { isPrivateCandidateInternalOnly } from "../safety/privateCandidatePolicy";
 
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const SENDGRID_BASE_URL = "https://api.sendgrid.com/v3";
@@ -186,6 +187,16 @@ function draftEmail(payload: EmailPayload): EmailResult {
  * Send an email. Uses SendGrid if API key is configured, otherwise logs as draft.
  */
 export async function sendEmail(payload: EmailPayload): Promise<EmailResult> {
+  if (isPrivateCandidateInternalOnly()) {
+    console.warn("[SendGrid] Email blocked by private-candidate containment");
+    return {
+      success: false,
+      deliveryStatus: "failed",
+      error: "Email blocked by private-candidate containment",
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   // Validate recipient
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(payload.to)) {
@@ -255,5 +266,5 @@ export function parseEmailDraft(draft: string): { subject: string; body: string 
  * Check if SendGrid is configured and available.
  */
 export function isSendGridConfigured(): boolean {
-  return Boolean(SENDGRID_API_KEY);
+  return !isPrivateCandidateInternalOnly() && Boolean(SENDGRID_API_KEY);
 }
