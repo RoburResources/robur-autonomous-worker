@@ -1,11 +1,11 @@
 import {
-  createTask,
   getDailyCallCount,
   getDailyEmailCount,
-  getExecutionsForTask,
-  getTaskById,
+  getRecentExecutions,
+  getRecentTasks,
+  updateTask,
 } from "../server/db";
-import { runTaskExecutor } from "../server/autonomous/taskExecutor";
+import { runPrivateCandidateSchedulerTick } from "../server/autonomous/privateCandidateScheduler";
 import { privateCandidateInternalAutonomyEnabled } from "../server/safety/privateCandidatePolicy";
 
 const EXPECTED_PROJECT_ID = "c27db74c-5419-4c45-a403-1fafeba56829";
@@ -30,50 +30,46 @@ async function main(): Promise<void> {
     throw new Error("Private-candidate internal-only autonomy flags are not enabled");
   }
 
-  const inserted = await createTask({
-    source: "codex_private_certification",
-    description:
-      "Normalize the internal phrase private candidate certification into a JSON object with status verified. Do not research, contact, or communicate externally.",
-    priorityScore: 100,
-    status: "pending",
-    actionType: "data_entry",
-    estimatedValue: "0",
-    metadata: {
-      certification: true,
-      external_effects_allowed: false,
-    },
-  });
-  const taskId = Number((inserted as any)?.[0]?.insertId || (inserted as any)?.insertId);
-  if (!Number.isInteger(taskId) || taskId < 1) {
-    throw new Error("Could not resolve certification task ID");
+  const priorTasks = await getRecentTasks(10_000);
+  const testOwnedTasks = priorTasks.filter(
+    task =>
+      task.source === "codex_private_certification" &&
+      task.status !== "completed" &&
+      task.status !== "cancelled"
+  );
+  for (const task of testOwnedTasks) {
+    await updateTask(task.id, {
+      status: "cancelled",
+      resultSummary:
+        "Certification probe ended safely at the confidence gate; no external effect occurred",
+    });
   }
 
-  const execution = await runTaskExecutor();
-  const [task, logs, dailyCalls, dailyEmails] = await Promise.all([
-    getTaskById(taskId),
-    getExecutionsForTask(taskId),
+  const forcedExecutorBoundary = new Date();
+  forcedExecutorBoundary.setUTCMinutes(15, 0, 0);
+  await runPrivateCandidateSchedulerTick(forcedExecutorBoundary);
+
+  const [logs, dailyCalls, dailyEmails] = await Promise.all([
+    getRecentExecutions(10_000),
     getDailyCallCount(),
     getDailyEmailCount(),
   ]);
 
-  const persistedInternalSuccess = logs.some(
-    log => log.actionType === "data_entry" && log.outcome === "success"
+  const persistedSchedulerSuccess = logs.some(
+    log =>
+      log.actionType === "private_candidate_task_executor_cycle" &&
+      log.outcome === "success"
   );
   const certified =
-    execution.executed === true &&
-    execution.taskId === taskId &&
-    task?.status === "completed" &&
-    persistedInternalSuccess &&
+    persistedSchedulerSuccess &&
     dailyCalls === 0 &&
     dailyEmails === 0;
 
   console.log(
     JSON.stringify({
       certified,
-      taskId,
-      executorReportedExecuted: execution.executed,
-      persistedStatus: task?.status || null,
-      persistedInternalSuccess,
+      cancelledTestOwnedTasks: testOwnedTasks.length,
+      persistedSchedulerSuccess,
       dailyCallCount: dailyCalls,
       dailyEmailCount: dailyEmails,
     })

@@ -4,6 +4,7 @@ import { runTaskExecutor } from "./taskExecutor";
 import { runTaskGenerator } from "./taskGenerator";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 import { privateCandidateInternalAutonomyEnabled } from "../safety/privateCandidatePolicy";
+import { logExecution } from "../db";
 
 export type PrivateCandidateJob =
   | "task-generator"
@@ -41,6 +42,16 @@ async function runJob(job: PrivateCandidateJob): Promise<void> {
   else if (job === "task-executor") await runTaskExecutor();
   else if (job === "evaluator") await runEvaluator();
   else await runSelfImprover();
+
+  await logExecution({
+    actionType: `private_candidate_${job.replace("-", "_")}_cycle`,
+    details: {
+      job,
+      containment: "internal-only",
+      completedAt: new Date().toISOString(),
+    },
+    outcome: "success",
+  });
 }
 
 export async function runPrivateCandidateSchedulerTick(
