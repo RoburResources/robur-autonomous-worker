@@ -15,6 +15,26 @@ import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
+export function isMysqlDuplicateKeyError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as {
+      code?: string;
+      errno?: number;
+      cause?: unknown;
+    };
+    if (candidate.code === "ER_DUP_ENTRY" || candidate.errno === 1062) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+
+  return false;
+}
+
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
@@ -236,6 +256,7 @@ export async function claimInboundSms(messageSid: string): Promise<boolean> {
     });
     return true;
   } catch (error) {
+    if (isMysqlDuplicateKeyError(error)) return false;
     const mysqlError = error as { code?: string; errno?: number };
     if (mysqlError.code === "ER_DUP_ENTRY" || mysqlError.errno === 1062) {
       return false;
@@ -271,6 +292,7 @@ export async function claimPrivateCandidateJobSlot(
       description: "Distributed private-candidate scheduler slot claim",
     });
   } catch (error) {
+    if (isMysqlDuplicateKeyError(error)) return false;
     const mysqlError = error as { code?: string; errno?: number };
     if (mysqlError.code === "ER_DUP_ENTRY" || mysqlError.errno === 1062) {
       return false;
