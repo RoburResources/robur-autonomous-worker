@@ -26,6 +26,11 @@ import {
   enforceLegacyWorkerRetirement,
   getLegacyWorkerRuntimeGate,
 } from "../safety/legacyWorkerGate";
+import {
+  createRateLimiter,
+  requireSameOriginMutation,
+  securityHeaders,
+} from "./httpSecurity";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -49,6 +54,40 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  app.disable("x-powered-by");
+  app.use(securityHeaders);
+  app.use(
+    "/api",
+    createRateLimiter({
+      max: 300,
+      windowMs: 15 * 60 * 1000,
+      namespace: "api",
+    })
+  );
+  app.use(
+    "/api/oauth",
+    createRateLimiter({
+      max: 20,
+      windowMs: 15 * 60 * 1000,
+      namespace: "oauth",
+    })
+  );
+  app.use(
+    "/api/webhooks",
+    createRateLimiter({
+      max: 60,
+      windowMs: 60 * 1000,
+      namespace: "webhooks",
+    })
+  );
+  app.use(
+    "/manus-storage",
+    createRateLimiter({
+      max: 120,
+      windowMs: 15 * 60 * 1000,
+      namespace: "storage",
+    })
+  );
 
   const startupGate = await enforceLegacyWorkerRetirement();
   console.log(
@@ -56,9 +95,10 @@ async function startServer() {
       ? "[Safety] Legacy worker environment enabled; persisted owner authorization still controls execution"
       : "[Safety] Legacy worker is retired/paused"
   );
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // This service has no direct upload route. Keep request bodies tightly bounded.
+  app.use(express.json({ limit: "1mb" }));
+  app.use(express.urlencoded({ limit: "1mb", extended: true }));
+  app.use("/api/trpc", requireSameOriginMutation);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
 

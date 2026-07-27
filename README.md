@@ -1,5 +1,12 @@
 # Robur Autonomous Worker
 
+> **Railway private-candidate rule:** do not follow the cron-registration steps
+> below for the isolated Railway candidate. Keep it paused, without domains,
+> cron schedules, or provider webhooks. See
+> [PRIVATE_CANDIDATE_OPERATIONS.md](./PRIVATE_CANDIDATE_OPERATIONS.md) for the
+> authoritative target, containment controls, verification, and rollback
+> process.
+
 An always-on, self-directing AI agent system that generates its own tasks, executes them using real-world tools (phone calls, SMS, email, web research), evaluates outcomes, and improves its own strategies over time. Built on a modern TypeScript stack with a live admin dashboard.
 
 > **Platform note:** This project is built on the [Manus WebDev](https://manus.im) platform, which provides the LLM proxy, OAuth, database, cron scheduler (Heartbeat), and hosting infrastructure. The core autonomous worker logic is fully portable — see [Adapting to Other Platforms](#adapting-to-other-platforms) for migration notes.

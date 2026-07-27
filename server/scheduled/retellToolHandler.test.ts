@@ -66,4 +66,17 @@ describe("Retell create-task webhook containment", () => {
     expect(dbMocks.createTask).toHaveBeenCalledTimes(1);
     expect(res.status).toHaveBeenCalledWith(200);
   });
+
+  it("rejects oversized or malformed task input without writing", async () => {
+    gateMocks.getLegacyWorkerRuntimeGate.mockResolvedValue({ allowed: true });
+    const req = requestMock("retell-test-key");
+    req.body.args.description = "x".repeat(2_001);
+    req.body.args.action_type = "../../shell";
+    const res = responseMock();
+
+    await retellCreateTaskHandler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(dbMocks.createTask).not.toHaveBeenCalled();
+  });
 });

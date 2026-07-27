@@ -15,6 +15,7 @@ const dbMocks = vi.hoisted(() => ({
 const twilioMocks = vi.hoisted(() => ({
   sendSMS: vi.fn(),
   isVerifiedOwnerSmsRequest: vi.fn(),
+  isVerifiedOwnerVoiceRequest: vi.fn(),
   parseInboundSMS: vi.fn(),
   claimInboundSms: vi.fn(),
 }));
@@ -196,6 +197,7 @@ describe("handleConversationalSMS — Natural language instruction", () => {
 
 describe("Voice webhook TwiML", () => {
   it("generates valid TwiML for Retell SIP routing", async () => {
+    twilioMocks.isVerifiedOwnerVoiceRequest.mockReturnValue(true);
     const { addisonVoiceWebhookHandler } = await import("./voiceWebhook");
     const mockReq = { body: { From: "+61495007200", To: "+61468061765" } } as any;
     const mockRes = {
@@ -213,5 +215,23 @@ describe("Voice webhook TwiML", () => {
     expect(mockRes.send).toHaveBeenCalledWith(
       expect.stringContaining("agent_7f02eb1896dd1e6deb38e54942")
     );
+  });
+
+  it("rejects an unsigned or non-owner voice webhook", async () => {
+    twilioMocks.isVerifiedOwnerVoiceRequest.mockReturnValue(false);
+    const { addisonVoiceWebhookHandler } = await import("./voiceWebhook");
+    const mockReq = {
+      body: { From: "+61400000000", To: "+61468061765" },
+    } as any;
+    const mockRes = {
+      set: vi.fn(),
+      status: vi.fn().mockReturnThis(),
+      send: vi.fn(),
+    } as any;
+
+    addisonVoiceWebhookHandler(mockReq, mockRes);
+
+    expect(mockRes.status).toHaveBeenCalledWith(403);
+    expect(mockRes.send).toHaveBeenCalledWith("<Response></Response>");
   });
 });

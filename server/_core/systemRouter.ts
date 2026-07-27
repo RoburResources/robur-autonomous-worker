@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { notifyOwner } from "./notification";
-import { ownerProcedure, publicProcedure, router } from "./trpc";
+import { ownerProcedure, router } from "./trpc";
 
 export const systemRouter = router({
-  health: publicProcedure
+  health: ownerProcedure
     .input(
       z.object({
         timestamp: z.number().min(0, "timestamp cannot be negative"),
@@ -16,8 +16,8 @@ export const systemRouter = router({
   notifyOwner: ownerProcedure
     .input(
       z.object({
-        title: z.string().min(1, "title is required"),
-        content: z.string().min(1, "content is required"),
+        title: z.string().trim().min(1, "title is required").max(200),
+        content: z.string().trim().min(1, "content is required").max(4_000),
       })
     )
     .mutation(async ({ input }) => {

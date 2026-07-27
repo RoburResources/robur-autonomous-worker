@@ -12,6 +12,7 @@ import { Request, Response } from "express";
 import { invokeLLM } from "../_core/llm";
 import { sendSMS } from "../integrations/twilio";
 import { createTask, logExecution, getConfig } from "../db";
+import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
  * Verify the Retell webhook signature.
@@ -26,15 +27,24 @@ export function isVerifiedRetellRequest(req: Request): boolean {
 }
 
 export async function retellWebhookHandler(req: Request, res: Response) {
-  // Respond immediately so Retell doesn't retry
+  if (!isVerifiedRetellRequest(req)) {
+    console.warn("[Retell Webhook] Unauthorized request");
+    res.status(403).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const runtimeGate = await getLegacyWorkerRuntimeGate();
+  if (!runtimeGate.allowed) {
+    console.warn(
+      `[Retell Webhook] Ignored while paused: ${runtimeGate.reason || "runtime gate denied"}`
+    );
+    res.status(200).json({ received: true, ignored: "worker_paused" });
+    return;
+  }
+
+  // Respond immediately after authentication so Retell doesn't retry.
   res.status(200).json({ received: true });
-
   try {
-    if (!isVerifiedRetellRequest(req)) {
-      console.warn("[Retell Webhook] Unauthorized request");
-      return;
-    }
-
     const event = req.body;
     const eventType = event?.event;
 

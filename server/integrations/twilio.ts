@@ -89,9 +89,11 @@ export function computeTwilioSignature(
  * Validate the exact Twilio signature against a configured canonical HTTPS
  * webhook URL. We do not derive the URL from proxy-controlled headers.
  */
-export function validateTwilioWebhook(req: Request): boolean {
+export function validateTwilioWebhook(
+  req: Request,
+  webhookUrl = process.env.TWILIO_SMS_WEBHOOK_URL || ""
+): boolean {
   const authToken = process.env.TWILIO_AUTH_TOKEN || "";
-  const webhookUrl = process.env.TWILIO_SMS_WEBHOOK_URL || "";
   const signature = req.get("x-twilio-signature") || "";
   const formFields = stringFormFields(req.body);
 
@@ -123,6 +125,21 @@ export function isVerifiedOwnerSmsRequest(req: Request): boolean {
     /^\+[1-9]\d{7,14}$/.test(ownerPhone) &&
     sender === ownerPhone &&
     validateTwilioWebhook(req)
+  );
+}
+
+export function isVerifiedOwnerVoiceRequest(req: Request): boolean {
+  const ownerPhone = process.env.OWNER_PHONE_E164 || "";
+  const twilioPhone = process.env.TWILIO_PHONE_NUMBER || "";
+  const voiceWebhookUrl = process.env.TWILIO_VOICE_WEBHOOK_URL || "";
+  const formFields = stringFormFields(req.body);
+
+  return (
+    /^\+[1-9]\d{7,14}$/.test(ownerPhone) &&
+    /^\+[1-9]\d{7,14}$/.test(twilioPhone) &&
+    formFields?.From === ownerPhone &&
+    formFields?.To === twilioPhone &&
+    validateTwilioWebhook(req, voiceWebhookUrl)
   );
 }
 

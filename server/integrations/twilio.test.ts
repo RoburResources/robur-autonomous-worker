@@ -3,6 +3,7 @@ import type { Request } from "express";
 import {
   computeTwilioSignature,
   isVerifiedOwnerSmsRequest,
+  isVerifiedOwnerVoiceRequest,
   validateTwilioWebhook,
 } from "./twilio";
 
@@ -69,6 +70,24 @@ describe("Twilio webhook authentication", () => {
     expect(
       validateTwilioWebhook(
         requestFor({ Body: "START", From: ownerPhone }, "anything")
+      )
+    ).toBe(false);
+  });
+
+  it("accepts a voice webhook only for the signed owner and configured number", () => {
+    const voiceUrl = "https://worker.example.com/api/webhooks/voice/addison";
+    const twilioPhone = "+61411111111";
+    vi.stubEnv("TWILIO_AUTH_TOKEN", authToken);
+    vi.stubEnv("TWILIO_VOICE_WEBHOOK_URL", voiceUrl);
+    vi.stubEnv("TWILIO_PHONE_NUMBER", twilioPhone);
+    vi.stubEnv("OWNER_PHONE_E164", ownerPhone);
+    const body = { From: ownerPhone, To: twilioPhone, CallSid: "CA123" };
+    const signature = computeTwilioSignature(authToken, voiceUrl, body);
+
+    expect(isVerifiedOwnerVoiceRequest(requestFor(body, signature))).toBe(true);
+    expect(
+      isVerifiedOwnerVoiceRequest(
+        requestFor({ ...body, From: "+61499999999" }, signature)
       )
     ).toBe(false);
   });

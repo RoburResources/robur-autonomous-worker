@@ -10,10 +10,17 @@
  */
 
 import { Request, Response } from "express";
+import { isVerifiedOwnerVoiceRequest } from "../integrations/twilio";
 
 const ADDISON_AGENT_ID = "agent_7f02eb1896dd1e6deb38e54942";
 
 export function addisonVoiceWebhookHandler(req: Request, res: Response) {
+  if (!isVerifiedOwnerVoiceRequest(req)) {
+    res.set("Content-Type", "text/xml");
+    res.status(403).send("<Response></Response>");
+    return;
+  }
+
   const from = req.body?.From || "unknown";
   const to = req.body?.To || "unknown";
 

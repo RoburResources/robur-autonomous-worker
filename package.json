@@ -10,12 +10,14 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
+    "verify": "pnpm check && pnpm test && pnpm build && pnpm audit --prod",
+    "verify:private": "tsx scripts/verify-private-candidate.ts",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.21",
-    "@aws-sdk/client-s3": "^3.693.0",
-    "@aws-sdk/s3-request-presigner": "^3.693.0",
+    "@aws-sdk/client-s3": "^3.1095.0",
+    "@aws-sdk/s3-request-presigner": "^3.1095.0",
     "@composio/core": "^0.14.0",
     "@composio/vercel": "^0.11.1",
     "@hookform/resolvers": "^5.2.2",
@@ -46,18 +48,18 @@
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tanstack/react-query": "^5.90.2",
-    "@trpc/client": "^11.6.0",
-    "@trpc/react-query": "^11.6.0",
-    "@trpc/server": "^11.6.0",
+    "@trpc/client": "^11.18.0",
+    "@trpc/react-query": "^11.18.0",
+    "@trpc/server": "^11.18.0",
     "ai": "^7.0.37",
-    "axios": "^1.12.0",
+    "axios": "^1.18.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "cookie": "^1.0.2",
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.2",
-    "drizzle-orm": "^0.44.5",
+    "drizzle-orm": "^0.45.2",
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
     "framer-motion": "^12.23.22",
@@ -115,7 +117,18 @@
       "wouter@3.7.1": "patches/wouter@3.7.1.patch"
     },
     "overrides": {
-      "tailwindcss>nanoid": "3.3.7"
+      "tailwindcss>nanoid": "3.3.7",
+      "fast-xml-parser": "5.10.1",
+      "form-data": "4.0.6",
+      "lodash": "4.18.1",
+      "lodash-es": "4.18.1",
+      "path-to-regexp": "0.1.13",
+      "dompurify": "3.4.12",
+      "mdast-util-to-hast": "13.2.1",
+      "qs": "6.15.2",
+      "uuid": "11.1.1",
+      "mermaid": "11.15.0",
+      "body-parser": "1.20.6"
     }
   }
 }

@@ -11,6 +11,13 @@ import { Request, Response } from "express";
 import { createTask } from "../db";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 import { isVerifiedRetellRequest } from "./retellWebhook";
+import { z } from "zod";
+
+const RetellTaskInput = z.object({
+  description: z.string().trim().min(1).max(2_000),
+  action_type: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+  priority: z.number().int().min(1).max(100).optional(),
+});
 
 export async function retellCreateTaskHandler(req: Request, res: Response) {
   try {
@@ -28,12 +35,12 @@ export async function retellCreateTaskHandler(req: Request, res: Response) {
       return;
     }
 
-    const { description, action_type, priority } = req.body?.args || req.body || {};
-
-    if (!description || !action_type) {
-      res.status(400).json({ error: "description and action_type are required" });
+    const parsed = RetellTaskInput.safeParse(req.body?.args || req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid task request" });
       return;
     }
+    const { description, action_type, priority } = parsed.data;
 
     const result = await createTask({
       description,

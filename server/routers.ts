@@ -43,9 +43,9 @@ export const appRouter = router({
     }),
     create: ownerProcedure
       .input(z.object({
-        goalText: z.string().min(1),
+        goalText: z.string().trim().min(1).max(4_000),
         priority: z.number().min(1).max(10).default(5),
-        subGoals: z.array(z.string()).optional(),
+        subGoals: z.array(z.string().trim().min(1).max(1_000)).max(50).optional(),
       }))
       .mutation(async ({ input }) => {
         await createGoal({
@@ -58,11 +58,11 @@ export const appRouter = router({
       }),
     update: ownerProcedure
       .input(z.object({
-        id: z.number(),
-        goalText: z.string().optional(),
+        id: z.number().int().positive(),
+        goalText: z.string().trim().min(1).max(4_000).optional(),
         status: z.enum(["active", "paused", "completed", "archived"]).optional(),
         priority: z.number().min(1).max(10).optional(),
-        subGoals: z.array(z.string()).optional(),
+        subGoals: z.array(z.string().trim().min(1).max(1_000)).max(50).optional(),
       }))
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
@@ -76,23 +76,25 @@ export const appRouter = router({
   // ─── Tasks ────────────────────────────────────────────────────────────────
   tasks: router({
     list: ownerProcedure
-      .input(z.object({ limit: z.number().default(100) }).optional())
+      .input(
+        z.object({ limit: z.number().int().min(1).max(500).default(100) }).optional()
+      )
       .query(async ({ input }) => {
         return getRecentTasks(input?.limit || 100);
       }),
     byStatus: ownerProcedure
       .input(z.object({
         status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled", "awaiting_approval"]),
-        limit: z.number().default(50),
+        limit: z.number().int().min(1).max(500).default(50),
       }))
       .query(async ({ input }) => {
         return getTasksByStatus(input.status, input.limit);
       }),
     update: ownerProcedure
       .input(z.object({
-        id: z.number(),
+        id: z.number().int().positive(),
         status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled", "awaiting_approval"]).optional(),
-        priorityScore: z.number().optional(),
+        priorityScore: z.number().int().min(1).max(100).optional(),
       }))
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
@@ -101,10 +103,13 @@ export const appRouter = router({
       }),
     create: ownerProcedure
       .input(z.object({
-        description: z.string().min(1),
-        actionType: z.string().default("web_research"),
-        priorityScore: z.number().default(50),
-        goalId: z.number().optional(),
+        description: z.string().trim().min(1).max(4_000),
+        actionType: z
+          .string()
+          .regex(/^[a-z][a-z0-9_]{0,63}$/)
+          .default("web_research"),
+        priorityScore: z.number().int().min(1).max(100).default(50),
+        goalId: z.number().int().positive().optional(),
       }))
       .mutation(async ({ input }) => {
         await createTask({
@@ -122,12 +127,14 @@ export const appRouter = router({
   // ─── Execution Log ────────────────────────────────────────────────────────
   executions: router({
     list: ownerProcedure
-      .input(z.object({ limit: z.number().default(100) }).optional())
+      .input(
+        z.object({ limit: z.number().int().min(1).max(500).default(100) }).optional()
+      )
       .query(async ({ input }) => {
         return getRecentExecutions(input?.limit || 100);
       }),
     forTask: ownerProcedure
-      .input(z.object({ taskId: z.number() }))
+      .input(z.object({ taskId: z.number().int().positive() }))
       .query(async ({ input }) => {
         return getExecutionsForTask(input.taskId);
       }),
@@ -136,7 +143,9 @@ export const appRouter = router({
   // ─── Evaluations ─────────────────────────────────────────────────────────
   evaluations: router({
     list: ownerProcedure
-      .input(z.object({ limit: z.number().default(50) }).optional())
+      .input(
+        z.object({ limit: z.number().int().min(1).max(500).default(50) }).optional()
+      )
       .query(async ({ input }) => {
         return getRecentEvaluations(input?.limit || 50);
       }),
@@ -145,16 +154,18 @@ export const appRouter = router({
   // ─── Opportunities ────────────────────────────────────────────────────────
   opportunities: router({
     list: ownerProcedure
-      .input(z.object({ limit: z.number().default(50) }).optional())
+      .input(
+        z.object({ limit: z.number().int().min(1).max(500).default(50) }).optional()
+      )
       .query(async ({ input }) => {
         return getOpportunities(input?.limit || 50);
       }),
     create: ownerProcedure
       .input(z.object({
-        source: z.string(),
-        description: z.string(),
+        source: z.string().trim().min(1).max(200),
+        description: z.string().trim().min(1).max(4_000),
         priority: z.enum(["low", "medium", "high", "critical"]).default("medium"),
-        estimatedValue: z.string().optional(),
+        estimatedValue: z.string().trim().max(100).optional(),
       }))
       .mutation(async ({ input }) => {
         await createOpportunity({
@@ -167,7 +178,7 @@ export const appRouter = router({
       }),
     update: ownerProcedure
       .input(z.object({
-        id: z.number(),
+        id: z.number().int().positive(),
         status: z.enum(["new", "investigating", "actioned", "dismissed"]).optional(),
         priority: z.enum(["low", "medium", "high", "critical"]).optional(),
       }))
@@ -184,15 +195,17 @@ export const appRouter = router({
       return getAllConfig();
     }),
     get: ownerProcedure
-      .input(z.object({ key: z.string() }))
+      .input(
+        z.object({ key: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/) })
+      )
       .query(async ({ input }) => {
         return getConfig(input.key);
       }),
     set: ownerProcedure
       .input(z.object({
-        key: z.string(),
-        value: z.string(),
-        description: z.string().optional(),
+        key: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/),
+        value: z.string().max(10_000),
+        description: z.string().trim().max(1_000).optional(),
       }))
       .mutation(async ({ input }) => {
         await setConfig(input.key, input.value, input.description);
@@ -206,7 +219,9 @@ export const appRouter = router({
       return getTodayMetrics();
     }),
     recent: ownerProcedure
-      .input(z.object({ days: z.number().default(30) }).optional())
+      .input(
+        z.object({ days: z.number().int().min(1).max(366).default(30) }).optional()
+      )
       .query(async ({ input }) => {
         return getRecentMetrics(input?.days || 30);
       }),
