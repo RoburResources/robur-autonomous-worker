@@ -17,17 +17,29 @@ empty Railway `production` environment is not a deployment target.
 
 ## Required containment state
 
-The candidate is not ready for live autonomous operation unless all of these
-remain true:
+The candidate may run internal autonomous work only when all of these remain
+true:
 
-- `kill_switch_active=true`
-- `system_status=paused`
-- `autonomousExecution=false`
+- `PRIVATE_CANDIDATE_INTERNAL_ONLY=true`
+- `PRIVATE_CANDIDATE_INTERNAL_AUTONOMY=true`
+- only `web_research` and `data_entry` tasks are executable
 - no public or custom domain
-- no cron schedules
+- no Railway or provider cron schedules
 - no provider webhooks pointing to this service
 - no production, Rachel, payment, call, SMS, or email changes
 - owner-only reads and writes
+
+The in-process scheduler may be activated with:
+
+- `kill_switch_active=false`
+- `system_status=active`
+- `legacy_worker_owner_authorized=true`
+- `autonomousExecution=true`
+
+This activation authorizes internal LLM reasoning, task generation, internal
+research/data-entry execution, evaluation, and self-improvement only. Any task
+whose action type could call, SMS, email, or otherwise communicate externally
+is moved to `awaiting_approval` without sending a notification.
 
 Use an SSH tunnel for private access. Do not create a public Railway domain to
 run a health or browser test.
@@ -46,13 +58,15 @@ owner session only in the process environment:
 ```powershell
 $env:PRIVATE_CANDIDATE_URL='http://127.0.0.1:18080'
 $env:PRIVATE_OWNER_SESSION='<ephemeral signed session>'
+$env:EXPECT_INTERNAL_AUTONOMY='true'
 npm.cmd run verify:private
 Remove-Item Env:PRIVATE_OWNER_SESSION
+Remove-Item Env:EXPECT_INTERNAL_AUTONOMY
 ```
 
 The verifier is deliberately restricted to localhost. It performs read-only
-owner checks plus rejected unauthenticated probes. It never opens the kill
-switch or creates a task.
+owner checks plus rejected unauthenticated probes. It never changes the worker
+state or creates a task.
 
 ## Security controls
 
@@ -71,8 +85,9 @@ switch or creates a task.
 
 ## Monitoring and incident response
 
-Railway health is `/api/health`; it must report
-`legacyWorkerStatus=retired_or_paused` and `autonomousExecution=false`.
+Railway health is `/api/health`; while the contained internal scheduler is
+active it must report `legacyWorkerStatus=enabled` and
+`autonomousExecution=true`.
 Inspect Railway deployment status and logs after every mutation. External alert
 delivery is not configured because sending SMS, email, calls, or third-party
 notifications is a protected external communication.

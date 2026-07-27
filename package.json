@@ -12,6 +12,7 @@
     "test": "vitest run",
     "verify": "pnpm check && pnpm test && pnpm build && pnpm audit --prod",
     "verify:private": "tsx scripts/verify-private-candidate.ts",
+    "activate:private": "tsx scripts/activate-private-candidate.ts",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
   },
   "dependencies": {

@@ -1,5 +1,7 @@
 const rawBaseUrl = process.env.PRIVATE_CANDIDATE_URL || "";
 const ownerSession = process.env.PRIVATE_OWNER_SESSION || "";
+const expectInternalAutonomy =
+  process.env.EXPECT_INTERNAL_AUTONOMY === "true";
 
 if (!rawBaseUrl) {
   throw new Error(
@@ -46,10 +48,13 @@ const healthBody = (await health.json()) as {
   legacyWorkerStatus?: string;
 };
 checks.push({
-  name: "worker remains paused",
+  name: expectInternalAutonomy
+    ? "worker internal autonomy is active"
+    : "worker remains paused",
   ok:
-    healthBody.autonomousExecution === false &&
-    healthBody.legacyWorkerStatus === "retired_or_paused",
+    healthBody.autonomousExecution === expectInternalAutonomy &&
+    healthBody.legacyWorkerStatus ===
+      (expectInternalAutonomy ? "enabled" : "retired_or_paused"),
   detail: `autonomousExecution=${String(healthBody.autonomousExecution)}`,
 });
 checks.push({
