@@ -41,4 +41,4 @@
 - [x] Canary execution: synthetic data dry-run before real execution for external-contact tasks
 - [x] DB schema: confidence_score, premortem_risks, verification_result, dag_dependencies stored in metadata JSON (no migration needed)
 - [x] Tests: 24 new vitest tests for all 6 modules (46 total passing)
-- [ ] Checkpoint and redeploy with all upgrades live
+- [x] Checkpoint and redeploy with all upgrades live

@@ -1,5 +1,6 @@
 import { invokeLLM } from "../_core/llm";
 import { getActiveGoals, createTask, getConfig, getAllConfig, getRecentTasks, logExecution } from "../db";
+import { linkBatchDependencies } from "./dependencyLinker";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 
 /**
@@ -175,6 +176,22 @@ Respond in JSON format with an array of task objects.`
         }),
       });
       created++;
+
+    // Link dependencies within this batch (Part A of DAG resolution)
+    if (tasks.length > 0) {
+      try {
+        const batchTasks = tasks.map((t: any) => ({
+          description: t.description,
+          dependencies: t.dependencies || [],
+        }));
+        const resolutions = await linkBatchDependencies(batchTasks);
+        if (resolutions.length > 0) {
+          console.log(`[Task Generator] Linked ${resolutions.length} batch dependencies`);
+        }
+      } catch (error) {
+        console.warn("[Task Generator] Error linking batch dependencies:", error);
+      }
+    }
     }
 
     // Log the execution
