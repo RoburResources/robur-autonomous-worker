@@ -412,8 +412,31 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
   if (!response.ok) {
     const errorText = await response.text();
-    // Specific handling for Manus Forge usage exhaustion (412)
+    // Specific handling for Manus Forge usage exhaustion (412) — fall back to OpenAI
     if (response.status === 412 && errorText.includes("usage exhausted")) {
+      const openaiKey = process.env.OPENAI_API_KEY;
+      if (openaiKey) {
+        console.warn("[LLM] Manus Forge quota exhausted — falling back to OpenAI gpt-4o-mini");
+        // Remap model: use gpt-4o-mini for all fallback calls
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { thinking: _t, reasoning: _r, ...payloadWithoutThinking } = payload;
+        const fallbackPayload = { ...payloadWithoutThinking, model: "gpt-4o-mini" };
+        const fallbackResponse = await fetchWithBackoff("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${openaiKey}`,
+          },
+          body: JSON.stringify(fallbackPayload),
+        });
+        if (!fallbackResponse.ok) {
+          const fallbackError = await fallbackResponse.text();
+          console.error("[LLM] OpenAI fallback also failed:", fallbackError);
+          throw new Error(`LLM_USAGE_EXHAUSTED: ${errorText}`);
+        }
+        console.log("[LLM] OpenAI fallback succeeded");
+        return (await fallbackResponse.json()) as InvokeResult;
+      }
       console.error("[LLM] Manus Forge account usage exhausted — LLM calls will fail until quota resets");
       throw new Error(`LLM_USAGE_EXHAUSTED: ${errorText}`);
     }

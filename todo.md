@@ -105,3 +105,11 @@ Tasks with unmet dependencies (robur_os_backend, xero_integration, twilio_webhoo
 - [x] All 6 cron jobs scheduled (generation, execution, evaluation, self-improvement, morning briefing, evening briefing)
 - [x] System status: ACTIVE, autonomy: ENABLED, kill_switch: FALSE
 - [x] Ready for production deployment
+
+## OpenAI Fallback Fix (Critical)
+
+- [x] Add OPENAI_API_KEY secret to project
+- [x] Update LLM module to fall back to OpenAI gpt-4o-mini when Manus Forge returns 412
+- [x] Add LLM fallback to taskGenerator (currently crashes entire generation cycle)
+- [x] Test full generation + execution cycle end-to-end — OpenAI fallback confirmed working
+- [x] Checkpoint and deploy

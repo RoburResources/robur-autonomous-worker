@@ -37,7 +37,7 @@ export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?
       return { tasksCreated: 0, error: `Queue already has ${pendingCount} pending tasks — skipping generation` };
     }
 
-    const model = (await getConfig("task_generation_model")) || "gpt-5-mini";
+    const model = (await getConfig("task_generation_model")) || "gpt-4o-mini";
     const maxTasksPerCycle = parseInt(await getConfig("max_tasks_per_generation_cycle") || "5");
     const minInternalRatio = parseFloat(await getConfig("min_internal_task_ratio") || "0.6");
 
