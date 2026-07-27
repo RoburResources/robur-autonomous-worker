@@ -113,3 +113,12 @@ Tasks with unmet dependencies (robur_os_backend, xero_integration, twilio_webhoo
 - [x] Add LLM fallback to taskGenerator (currently crashes entire generation cycle)
 - [x] Test full generation + execution cycle end-to-end — OpenAI fallback confirmed working
 - [x] Checkpoint and deploy
+
+## Pre-mortem Fix + Live Execution Verified
+
+- [x] Fix pre-mortem: model was "gpt-5-mini" (invalid) — updated to "gpt-4o-mini"
+- [x] Fix pre-mortem: hard blockers only escalate for external contact tasks (outbound_call/send_email/send_sms)
+- [x] Fix pre-mortem: action-type-specific confidence thresholds (web_research: 0.60, data_entry: 0.65, send_email: 0.80, outbound_call: 0.85)
+- [x] Fix pre-mortem: calibration prompt updated — data quality concerns are NOT blockers for internal tasks
+- [x] Live execution verified: 4/5 cycles executed successfully, 1/5 correctly gated (high-value external contact)
+- [x] System ACTIVE, all gates passed, 117/117 tests passing

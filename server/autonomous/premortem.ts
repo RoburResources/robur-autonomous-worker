@@ -15,14 +15,25 @@ export interface FailureMode {
   isBlocker: boolean;
 }
 
-const CONFIDENCE_THRESHOLD = 0.85;
+// Thresholds by action type — internal tasks have lower escalation bar
+const CONFIDENCE_THRESHOLDS: Record<string, number> = {
+  web_research: 0.60,    // Research tasks are low-risk — only escalate if truly blocked
+  data_entry: 0.65,      // Data entry is low-risk
+  send_email: 0.80,      // External contact — higher bar
+  send_sms: 0.80,        // External contact — higher bar
+  outbound_call: 0.85,   // Calls are highest risk — strict threshold
+};
+const DEFAULT_CONFIDENCE_THRESHOLD = 0.75;
 
 /**
  * Pre-mortem engine — runs before every task execution.
  *
  * Asks the LLM: "What are the top 3 ways this task could fail?"
- * Returns a confidence score and failure modes. Tasks below 0.85
+ * Returns a confidence score and failure modes. Tasks below threshold
  * confidence are auto-escalated to human review via SMS.
+ *
+ * Hard blockers only escalate for EXTERNAL CONTACT tasks.
+ * Internal tasks (web_research, data_entry) proceed unless confidence is very low.
  */
 export async function runPremortem(task: {
   id: number;
@@ -33,19 +44,26 @@ export async function runPremortem(task: {
   try {
     const constitution = await getConfig("agent_constitution") || "";
     const actionType = task.actionType || "unknown";
+    const isExternalContact = ["outbound_call", "send_email", "send_sms"].includes(actionType);
+    const confidenceThreshold = CONFIDENCE_THRESHOLDS[actionType] ?? DEFAULT_CONFIDENCE_THRESHOLD;
 
     const response = await invokeLLM({
-      model: "gpt-5-mini",
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "system",
-          content: `You are a pre-mortem risk analyst for an autonomous AI business agent. Your job is to identify failure modes BEFORE a task executes so they can be mitigated or the task escalated to human review.
+          content: `You are a pre-mortem risk analyst for an autonomous AI business agent. Your job is to identify failure modes BEFORE a task executes.
 
-${constitution ? `Agent Constitution:\n${constitution.substring(0, 500)}\n\n` : ""}Assess the task honestly. Be specific about risks — generic answers like "it might fail" are not useful. Focus on concrete, actionable failure modes.`,
+${constitution ? `Agent Constitution:\n${constitution.substring(0, 500)}\n\n` : ""}IMPORTANT CALIBRATION:
+- For INTERNAL tasks (web_research, data_entry): Only mark isBlocker=true if the task is LITERALLY IMPOSSIBLE to attempt (e.g., required file doesn't exist, URL is invalid). Data quality concerns, incomplete results, or partial success are NOT blockers — the agent can still attempt the task and produce partial value.
+- For EXTERNAL CONTACT tasks (outbound_call, send_email, send_sms): Mark isBlocker=true if the action would cause real-world harm, violate compliance, or has a critical missing prerequisite (e.g., no phone number, no email address).
+- Be realistic about confidence: a web_research task should score 0.85+ unless there is a genuine technical blocker.
+
+Assess the task honestly. Be specific about risks.`,
         },
         {
           role: "user",
-          content: `Analyse this task before execution:\n\nTask: ${task.description}\nAction Type: ${actionType}\n\nIdentify the top 3 most likely failure modes. For each, assess likelihood, provide a mitigation, and flag if it is a hard blocker. Then provide an overall confidence score (0.0–1.0) for successful execution.`,
+          content: `Analyse this task before execution:\n\nTask: ${task.description}\nAction Type: ${actionType}\n\nIdentify the top 3 most likely failure modes. For each, assess likelihood, provide a mitigation, and flag if it is a hard blocker (see calibration rules above). Then provide an overall confidence score (0.0–1.0) for successful execution.`,
         },
       ],
       response_format: {
@@ -84,7 +102,6 @@ ${constitution ? `Agent Constitution:\n${constitution.substring(0, 500)}\n\n` : 
 
     const content = response.choices[0]?.message?.content as string;
     if (!content) {
-      // If LLM fails, default to low confidence to force escalation
       return {
         confidenceScore: 0.5,
         failureModes: [{ risk: "Pre-mortem LLM call failed", likelihood: "high", mitigation: "Manual review required", isBlocker: false }],
@@ -99,17 +116,18 @@ ${constitution ? `Agent Constitution:\n${constitution.substring(0, 500)}\n\n` : 
     const confidenceScore = Math.max(0, Math.min(1, parsed.confidenceScore));
     const failureModes = parsed.failureModes || [];
 
-    // Check for hard blockers
-    const hardBlockers = failureModes.filter(f => f.isBlocker && f.likelihood !== "low");
-    const hasHardBlocker = hardBlockers.length > 0;
+    // Hard blockers only trigger escalation for external contact tasks
+    // Internal tasks (web_research, data_entry) proceed unless confidence is very low
+    const hardBlockers = failureModes.filter(f => f.isBlocker && f.likelihood === "high");
+    const hasHardBlocker = isExternalContact && hardBlockers.length > 0;
 
-    const shouldEscalate = confidenceScore < CONFIDENCE_THRESHOLD || hasHardBlocker;
+    const shouldEscalate = confidenceScore < confidenceThreshold || hasHardBlocker;
     let escalationReason: string | undefined;
 
     if (hasHardBlocker) {
       escalationReason = `Hard blocker identified: ${hardBlockers[0].risk}`;
-    } else if (confidenceScore < CONFIDENCE_THRESHOLD) {
-      escalationReason = `Confidence score ${(confidenceScore * 100).toFixed(0)}% is below the ${(CONFIDENCE_THRESHOLD * 100).toFixed(0)}% threshold`;
+    } else if (confidenceScore < confidenceThreshold) {
+      escalationReason = `Confidence score ${(confidenceScore * 100).toFixed(0)}% is below the ${(confidenceThreshold * 100).toFixed(0)}% threshold for ${actionType}`;
     }
 
     return { confidenceScore, failureModes, shouldEscalate, escalationReason };
