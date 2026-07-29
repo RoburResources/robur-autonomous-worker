@@ -8,8 +8,13 @@ import "./index.css";
 
 const OWNER_SESSION_STORAGE_KEY = "private-owner-session";
 
-async function bootstrapPrivateOwnerAccess(): Promise<boolean> {
-  if (window.location.pathname !== "/owner-access") return false;
+type OwnerAccessBootstrapResult =
+  | { handled: false }
+  | { handled: true; error: null }
+  | { handled: true; error: string };
+
+async function bootstrapPrivateOwnerAccess(): Promise<OwnerAccessBootstrapResult> {
+  if (window.location.pathname !== "/owner-access") return { handled: false };
 
   const fragment = window.location.hash.startsWith("#")
     ? window.location.hash.slice(1)
@@ -21,8 +26,10 @@ async function bootstrapPrivateOwnerAccess(): Promise<boolean> {
   window.history.replaceState(null, "", "/owner-access");
 
   if (!bootstrapToken) {
-    window.location.replace("/");
-    return true;
+    return {
+      handled: true,
+      error: "This private access link is incomplete. Open the full owner access link again.",
+    };
   }
 
   try {
@@ -48,10 +55,25 @@ async function bootstrapPrivateOwnerAccess(): Promise<boolean> {
     try {
       sessionStorage.removeItem(OWNER_SESSION_STORAGE_KEY);
     } catch {}
+    return {
+      handled: true,
+      error: "This private access link has expired or was already used. Open a new owner access link.",
+    };
   }
 
   window.location.replace("/");
-  return true;
+  return { handled: true, error: null };
+}
+
+function OwnerAccessFailure({ message }: { message: string }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background p-6">
+      <section className="w-full max-w-md space-y-4 rounded-xl border bg-card p-6 text-center shadow-sm">
+        <h1 className="text-xl font-semibold">Robur Autonomous Worker</h1>
+        <p className="text-sm text-muted-foreground">{message}</p>
+      </section>
+    </main>
+  );
 }
 
 const queryClient = new QueryClient();
@@ -98,8 +120,15 @@ const trpcClient = trpc.createClient({
   ],
 });
 
-void bootstrapPrivateOwnerAccess().then(redirected => {
-  if (redirected) return;
+void bootstrapPrivateOwnerAccess().then(result => {
+  if (result.handled) {
+    if (result.error) {
+      createRoot(document.getElementById("root")!).render(
+        <OwnerAccessFailure message={result.error} />
+      );
+    }
+    return;
+  }
   createRoot(document.getElementById("root")!).render(
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
