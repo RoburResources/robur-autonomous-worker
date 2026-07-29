@@ -64,6 +64,27 @@ Rules:
   try {
     const response = await invokeLLM({
       model: "gpt-4o-mini",
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "dependency_resolutions",
+          strict: true,
+          schema: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                taskId: { type: "number" },
+                dependsOn: { type: "array", items: { type: "number" } },
+                confidence: { type: "number" },
+                reasoning: { type: "string" },
+              },
+              required: ["taskId", "dependsOn", "confidence", "reasoning"],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
       messages: [
         {
           role: "user",
