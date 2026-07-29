@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Eye, Play, Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { linkifyResult } from "@/lib/linkifyResult";
 
 const statusColors: Record<string, string> = {
   pending: "bg-yellow-500/10 text-yellow-600 border-yellow-500/20",
@@ -22,22 +23,22 @@ const statusColors: Record<string, string> = {
 };
 
 function LinkedResult({ value }: { value: string }) {
-  const parts = value.split(/(https?:\/\/[^\s]+)/g);
+  const parts = linkifyResult(value);
   return (
     <div className="whitespace-pre-wrap break-words text-sm leading-6">
       {parts.map((part, index) =>
-        /^https?:\/\//.test(part) ? (
+        part.href ? (
           <a
-            key={`${part}-${index}`}
-            href={part.replace(/[.,;:]+$/, "")}
+            key={`${part.href}-${index}`}
+            href={part.href}
             target="_blank"
             rel="noreferrer"
             className="text-primary underline underline-offset-2"
           >
-            {part}
+            {part.text}
           </a>
         ) : (
-          part
+          part.text
         )
       )}
     </div>
