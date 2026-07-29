@@ -452,13 +452,21 @@ export async function runTaskExecutor(
         metadata: task.metadata,
       });
 
+      const researchVerificationAccepted =
+        verificationResult.verified === true &&
+        verificationResult.verdict === "pass" &&
+        verificationResult.recommendedAction === "accept" &&
+        verificationResult.unintendedSideEffects.length === 0;
+
       // Research must be positively verified; other legacy action types keep
       // their existing fail-verdict behaviour.
       if (
-        !verificationResult.verified &&
         (
-          task.actionType === "web_research" ||
-          verificationResult.verdict === "fail"
+          (task.actionType === "web_research" &&
+            !researchVerificationAccepted) ||
+          (task.actionType !== "web_research" &&
+            !verificationResult.verified &&
+            verificationResult.verdict === "fail")
         )
       ) {
         result.success = false;

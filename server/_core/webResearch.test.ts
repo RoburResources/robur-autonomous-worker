@@ -225,6 +225,21 @@ describe("grounded web research", () => {
     });
   });
 
+  it("retains a complete model response beyond the old 6,000-character cap", () => {
+    const response = groundedResponse();
+    const ending = "COMPLETE_RESEARCH_END";
+    const summary = formatGroundedResearchSummary({
+      text: `${"Evidence. ".repeat(750)}${ending}`,
+      sources: extractGroundedSources(response),
+      model: response.model,
+      responseId: response.id,
+      webSearchCallCount: 1,
+      attemptCount: 1,
+    });
+
+    expect(summary).toContain(ending);
+  });
+
   it("prevents uncited prose from being recorded as successful web research", () => {
     const validation = validateTaskOutput(
       "web_research",

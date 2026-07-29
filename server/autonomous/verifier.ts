@@ -9,6 +9,26 @@ export interface VerificationResult {
   recommendedAction: "accept" | "retry" | "escalate" | "rollback";
 }
 
+const MINIMUM_ACCEPTED_SCORE = 0.8;
+
+export function reconcileVerificationResult(
+  result: VerificationResult
+): VerificationResult {
+  const score = Math.max(0, Math.min(1, result.score));
+  const verified =
+    result.verified === true &&
+    result.verdict === "pass" &&
+    result.recommendedAction === "accept" &&
+    result.unintendedSideEffects.length === 0 &&
+    score >= MINIMUM_ACCEPTED_SCORE;
+
+  return {
+    ...result,
+    score,
+    verified,
+  };
+}
+
 /**
  * Dual-agent verifier — runs AFTER task execution.
  *
@@ -42,7 +62,12 @@ Assess:
 3. Were there any unintended side effects or risks introduced?
 4. What should happen next (accept, retry, escalate to human, or rollback)?
 
-Score 1.0 = perfect success, 0.0 = complete failure.`,
+Score 1.0 = perfect success, 0.0 = complete failure.
+
+Keep the fields internally consistent:
+- verified=true requires verdict=pass, recommendedAction=accept, no unintended side effects, and score at least 0.8.
+- verdict=partial or recommendedAction=retry means verified=false.
+- For a research task, a comprehensive source-backed finding that requested information is not publicly disclosed can still be a complete pass when the limitation is explicit. Do not require private facts or outside contact to call that research complete.`,
         },
         {
           role: "user",
@@ -99,10 +124,7 @@ Provide your independent verification verdict.`,
 
     const parsed = JSON.parse(content) as VerificationResult;
 
-    // Clamp score to valid range
-    parsed.score = Math.max(0, Math.min(1, parsed.score));
-
-    return parsed;
+    return reconcileVerificationResult(parsed);
   } catch (error: any) {
     return {
       verified: false,

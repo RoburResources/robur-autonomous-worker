@@ -300,6 +300,38 @@ describe("task executor atomic owner-run path", () => {
     ).toBe(false);
   });
 
+  it("does not complete research on a contradictory partial retry verdict", async () => {
+    mocks.claimPendingTask.mockResolvedValue(true);
+    mocks.verifyTaskOutcome.mockResolvedValue({
+      verified: true,
+      score: 0.9,
+      verdict: "partial",
+      reasoning: "The research needs another attempt",
+      recommendedAction: "retry",
+      unintendedSideEffects: [],
+    });
+
+    await expect(runTaskExecutor(task.id)).resolves.toEqual({
+      executed: true,
+      taskId: task.id,
+      succeeded: false,
+      error: expect.stringContaining("Research verification did not pass"),
+    });
+    expect(mocks.updateClaimedTask).toHaveBeenCalledWith(
+      task.id,
+      expect.any(String),
+      expect.objectContaining({
+        status: "failed",
+        metadata: expect.objectContaining({
+          verification_result: expect.objectContaining({
+            verdict: "partial",
+            recommendedAction: "retry",
+          }),
+        }),
+      })
+    );
+  });
+
   it("discards a stale result when its fencing token no longer owns the task", async () => {
     mocks.claimPendingTask.mockResolvedValue(true);
     mocks.updateClaimedTask.mockResolvedValue(false);

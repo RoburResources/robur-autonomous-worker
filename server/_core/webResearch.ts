@@ -2,7 +2,7 @@ import OpenAI from "openai";
 
 const DEFAULT_WEB_RESEARCH_MODEL = "gpt-5.6-luna";
 const MINIMUM_DISTINCT_SOURCES = 2;
-const MAX_RESEARCH_TEXT_LENGTH = 6_000;
+const MAX_RESEARCH_TEXT_LENGTH = 12_000;
 const MAX_GROUNDING_ATTEMPTS = 2;
 
 export type WebResearchSource = {
