@@ -846,6 +846,7 @@ async function executeResearch(task: any): Promise<ActionExecutionResult> {
           model: grounded.model,
           response_id: grounded.responseId,
           web_search_call_count: grounded.webSearchCallCount,
+          attempt_count: grounded.attemptCount,
           sources: grounded.sources,
           completed_at: new Date().toISOString(),
         },

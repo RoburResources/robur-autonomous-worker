@@ -67,6 +67,7 @@ describe("grounded web research", () => {
     );
 
     expect(result.webSearchCallCount).toBe(1);
+    expect(result.attemptCount).toBe(1);
     expect(result.sources).toHaveLength(2);
     expect(result.sources[0]?.url).not.toContain("#");
     expect(create).toHaveBeenCalledWith(
@@ -75,6 +76,7 @@ describe("grounded web research", () => {
         input:
           "Research task: Research Western Australian planning approvals for a hardstand.",
         include: ["web_search_call.action.sources"],
+        tool_choice: "required",
         tools: [
           expect.objectContaining({
             type: "web_search",
@@ -176,6 +178,29 @@ describe("grounded web research", () => {
     ).rejects.toThrow("without using web search");
   });
 
+  it("retries once when the first response fails the evidence gate", async () => {
+    const ungrounded = groundedResponse();
+    ungrounded.output = ungrounded.output.filter(
+      item => item.type !== "web_search_call"
+    );
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(ungrounded)
+      .mockResolvedValueOnce(groundedResponse());
+    const client = { responses: { create } } as WebResearchClient;
+
+    const result = await runGroundedWebResearch(
+      "Research Western Australian planning approvals for a hardstand.",
+      { client }
+    );
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(result.attemptCount).toBe(2);
+    expect(create.mock.calls[1]?.[0]?.instructions).toContain(
+      "previous attempt failed the evidence gate"
+    );
+  });
+
   it("formats retained evidence as a visible source list", () => {
     const response = groundedResponse();
     const sources = extractGroundedSources(response);
@@ -185,6 +210,7 @@ describe("grounded web research", () => {
       model: response.model,
       responseId: response.id,
       webSearchCallCount: 1,
+      attemptCount: 1,
     });
 
     expect(summary).toContain("findings:");

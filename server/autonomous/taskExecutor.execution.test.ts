@@ -184,6 +184,7 @@ describe("task executor atomic owner-run path", () => {
       model: "gpt-5.6-luna",
       responseId: "resp_test",
       webSearchCallCount: 1,
+      attemptCount: 1,
     });
     mocks.formatGroundedResearchSummary.mockReturnValue(
       "findings: Two linked official findings.\n\nSources:\n1. https://example.gov.au/one\n2. https://example.gov.au/two"
@@ -252,6 +253,7 @@ describe("task executor atomic owner-run path", () => {
         status: "completed",
         metadata: expect.objectContaining({
           output_schema_valid: true,
+          grounded_research: expect.objectContaining({ attempt_count: 1 }),
           verification_result: expect.objectContaining({ verified: true }),
         }),
       })
