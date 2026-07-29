@@ -333,6 +333,30 @@ describe("task executor atomic owner-run path", () => {
     );
   });
 
+  it("does not complete research below the accepted verification score", async () => {
+    mocks.claimPendingTask.mockResolvedValue(true);
+    mocks.verifyTaskOutcome.mockResolvedValue({
+      verified: true,
+      score: 0.79,
+      verdict: "pass",
+      reasoning: "The evidence is not yet strong enough",
+      recommendedAction: "accept",
+      unintendedSideEffects: [],
+    });
+
+    await expect(runTaskExecutor(task.id)).resolves.toMatchObject({
+      executed: true,
+      taskId: task.id,
+      succeeded: false,
+      error: expect.stringContaining("Research verification did not pass"),
+    });
+    expect(mocks.updateClaimedTask).toHaveBeenCalledWith(
+      task.id,
+      expect.any(String),
+      expect.objectContaining({ status: "failed" })
+    );
+  });
+
   it("discards a stale result when its fencing token no longer owns the task", async () => {
     mocks.claimPendingTask.mockResolvedValue(true);
     mocks.updateClaimedTask.mockResolvedValue(false);

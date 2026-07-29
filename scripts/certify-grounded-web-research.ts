@@ -34,12 +34,17 @@ async function main(): Promise<void> {
   console.log(
     JSON.stringify({
       certified:
+        result.responseStatus === "completed" &&
         result.sources.length >= 2 &&
         result.webSearchCallCount >= 1 &&
-        summary.includes("Sources:"),
+        summary.includes("Sources:") &&
+        /#{1,3}\s*Conclusion/i.test(result.text),
       model: result.model,
+      responseStatus: result.responseStatus,
+      hasConclusion: /#{1,3}\s*Conclusion/i.test(result.text),
       sourceCount: result.sources.length,
       webSearchCallCount: result.webSearchCallCount,
+      attemptCount: result.attemptCount,
       summaryLength: summary.length,
     })
   );

@@ -454,6 +454,7 @@ export async function runTaskExecutor(
 
       const researchVerificationAccepted =
         verificationResult.verified === true &&
+        verificationResult.score >= 0.8 &&
         verificationResult.verdict === "pass" &&
         verificationResult.recommendedAction === "accept" &&
         verificationResult.unintendedSideEffects.length === 0;

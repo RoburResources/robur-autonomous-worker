@@ -14,7 +14,7 @@ import { privateCandidateInternalAutonomyEnabled } from "../server/safety/privat
 const EXPECTED_PROJECT_ID = "c27db74c-5419-4c45-a403-1fafeba56829";
 const EXPECTED_ENVIRONMENT_ID = "894781b5-86ed-4df3-9f42-1393320bd857";
 const EXPECTED_SERVICE_ID = "31c607a8-09b6-40b1-955a-f952571c3e0d";
-const CERTIFICATION_SOURCE = "codex_cert_grounded_v1";
+const CERTIFICATION_SOURCE = "codex_cert_grounded_v2";
 
 function requireExact(name: string, actual: string | undefined, expected: string) {
   if (actual !== expected) {
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
         status: "pending",
         metadata: {
           owner_authorized: true,
-          certification_probe: "grounded_research_v1",
+          certification_probe: "grounded_research_v2",
           external_effects_allowed: false,
         },
       })
@@ -130,15 +130,29 @@ async function main(): Promise<void> {
   const successfulExecutions = logs.filter(
     log => log.actionType === "web_research" && log.outcome === "success"
   );
+  const normalizedMetadataKeys = Object.keys(metadata).filter(key =>
+    /^(0|[1-9]\d*)$/.test(key)
+  );
+  const findings = (task?.resultSummary || "").split("\n\nSources:")[0] || "";
   const certified =
     task?.status === "completed" &&
+    task.actionType === "web_research" &&
     metadata.output_schema_valid === true &&
     verification?.verified === true &&
+    Number(verification?.score) >= 0.8 &&
+    verification?.verdict === "pass" &&
+    verification?.recommendedAction === "accept" &&
+    Array.isArray(verification?.unintendedSideEffects) &&
+    verification.unintendedSideEffects.length === 0 &&
     typeof grounded?.model === "string" &&
+    grounded?.response_status === "completed" &&
+    Number(grounded?.attempt_count) >= 1 &&
     Number(grounded?.web_search_call_count) >= 1 &&
     Array.isArray(grounded?.sources) &&
     grounded.sources.length >= 2 &&
     distinctSummaryUrls(task.resultSummary) >= 2 &&
+    /#{1,3}\s*Conclusion/i.test(findings) &&
+    normalizedMetadataKeys.length === 0 &&
     successfulExecutions.length === 1 &&
     sourceRows.length === 1 &&
     taskOpportunities.length === 0 &&
@@ -154,11 +168,18 @@ async function main(): Promise<void> {
       executedNow,
       status: task?.status || null,
       model: grounded?.model || null,
+      responseStatus: grounded?.response_status || null,
+      attemptCount: Number(grounded?.attempt_count) || 0,
       sourceCount: Array.isArray(grounded?.sources)
         ? grounded.sources.length
         : 0,
       webSearchCallCount: Number(grounded?.web_search_call_count) || 0,
-      verificationPassed: verification?.verified === true,
+      hasConclusion: /#{1,3}\s*Conclusion/i.test(findings),
+      numericMetadataKeyCount: normalizedMetadataKeys.length,
+      verificationPassed:
+        verification?.verified === true &&
+        verification?.verdict === "pass" &&
+        verification?.recommendedAction === "accept",
       successfulExecutionCount: successfulExecutions.length,
       duplicateTaskCount: sourceRows.length - 1,
       opportunityMutationCount: taskOpportunities.length,
