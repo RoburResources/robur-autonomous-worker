@@ -48,6 +48,12 @@ function slotFor(job: PrivateCandidateJob, now: Date): string {
 }
 
 async function runJob(job: PrivateCandidateJob): Promise<void> {
+  let generatorResult:
+    | {
+        tasksCreated: number;
+        error?: string;
+      }
+    | undefined;
   let executorResult:
     | {
         executed: boolean;
@@ -56,7 +62,7 @@ async function runJob(job: PrivateCandidateJob): Promise<void> {
         error?: string;
       }
     | undefined;
-  if (job === "task-generator") await runTaskGenerator();
+  if (job === "task-generator") generatorResult = await runTaskGenerator();
   else if (job === "task-executor") executorResult = await runTaskExecutor();
   else if (job === "evaluator") await runEvaluator();
   else await runSelfImprover();
@@ -71,6 +77,17 @@ async function runJob(job: PrivateCandidateJob): Promise<void> {
     executorResult?.executed === true &&
     executorResult.succeeded === false;
   const executorError = boundedSchedulerError(executorResult?.error);
+  const generatorIdle =
+    generatorResult?.tasksCreated === 0 &&
+    (
+      !generatorResult.error ||
+      generatorResult.error === "No active goals" ||
+      generatorResult.error.startsWith("Queue already has ")
+    );
+  const generatorFailed =
+    Boolean(generatorResult?.error) && !generatorIdle;
+  const generatorError = boundedSchedulerError(generatorResult?.error);
+  const jobFailed = executorBlocked || executorFailed || generatorFailed;
   await logExecution({
     actionType: `private_candidate_${job.replace("-", "_")}_cycle`,
     details: {
@@ -85,11 +102,17 @@ async function runJob(job: PrivateCandidateJob): Promise<void> {
             idle: executorIdle,
           }
         : {}),
+      ...(generatorResult
+        ? {
+            tasksCreated: generatorResult.tasksCreated,
+            error: generatorError,
+            idle: generatorIdle,
+          }
+        : {}),
       completedAt: new Date().toISOString(),
     },
-    outcome: executorBlocked || executorFailed ? "partial" : "success",
-    errorMessage:
-      executorBlocked || executorFailed ? executorError : undefined,
+    outcome: jobFailed ? "partial" : "success",
+    errorMessage: jobFailed ? executorError || generatorError : undefined,
   });
 }
 

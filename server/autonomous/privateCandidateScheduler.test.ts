@@ -45,6 +45,9 @@ describe("private candidate scheduler", () => {
     });
     schedulerMocks.claimPrivateCandidateJobSlot.mockResolvedValue(true);
     schedulerMocks.logExecution.mockResolvedValue(undefined);
+    schedulerMocks.runTaskGenerator.mockResolvedValue({
+      tasksCreated: 0,
+    });
     schedulerMocks.runTaskExecutor.mockResolvedValue({
       executed: false,
       error: "No DAG-ready pending tasks",
@@ -142,6 +145,54 @@ describe("private candidate scheduler", () => {
           executed: true,
           succeeded: false,
           taskId: 43,
+        }),
+      })
+    );
+  });
+
+  it("records a full generator queue as an observable idle success", async () => {
+    schedulerMocks.runTaskGenerator.mockResolvedValue({
+      tasksCreated: 0,
+      error: "Queue already has 5 pending tasks (limit 5) — skipping generation",
+    });
+
+    await runPrivateCandidateSchedulerTick(
+      new Date("2026-07-29T12:00:00.000Z")
+    );
+
+    expect(schedulerMocks.logExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: "private_candidate_task_generator_cycle",
+        outcome: "success",
+        errorMessage: undefined,
+        details: expect.objectContaining({
+          tasksCreated: 0,
+          idle: true,
+          error:
+            "Queue already has 5 pending tasks (limit 5) — skipping generation",
+        }),
+      })
+    );
+  });
+
+  it("records a generator defect as partial instead of success", async () => {
+    schedulerMocks.runTaskGenerator.mockResolvedValue({
+      tasksCreated: 0,
+      error: "Invalid max_pending_tasks_before_generation config",
+    });
+
+    await runPrivateCandidateSchedulerTick(
+      new Date("2026-07-30T12:00:00.000Z")
+    );
+
+    expect(schedulerMocks.logExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: "private_candidate_task_generator_cycle",
+        outcome: "partial",
+        errorMessage: "Invalid max_pending_tasks_before_generation config",
+        details: expect.objectContaining({
+          tasksCreated: 0,
+          idle: false,
         }),
       })
     );
