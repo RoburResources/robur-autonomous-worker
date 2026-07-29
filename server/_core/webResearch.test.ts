@@ -11,6 +11,8 @@ function groundedResponse() {
   return {
     id: "resp_test",
     model: "gpt-5.6-luna",
+    status: "completed",
+    incomplete_details: null,
     output_text: "Two source-backed findings with inline citations.",
     output: [
       {
@@ -29,6 +31,7 @@ function groundedResponse() {
       },
       {
         type: "message" as const,
+        status: "completed",
         content: [
           {
             type: "output_text" as const,
@@ -68,6 +71,7 @@ describe("grounded web research", () => {
 
     expect(result.webSearchCallCount).toBe(1);
     expect(result.attemptCount).toBe(1);
+    expect(result.responseStatus).toBe("completed");
     expect(result.sources).toHaveLength(2);
     expect(result.sources[0]?.url).not.toContain("#");
     expect(create).toHaveBeenCalledWith(
@@ -77,6 +81,7 @@ describe("grounded web research", () => {
           "Research task: Research Western Australian planning approvals for a hardstand.",
         include: ["web_search_call.action.sources"],
         tool_choice: "required",
+        max_output_tokens: 3_200,
         tools: [
           expect.objectContaining({
             type: "web_search",
@@ -201,6 +206,42 @@ describe("grounded web research", () => {
     );
   });
 
+  it("rejects an output-token-truncated response and retries for a complete answer", async () => {
+    const incomplete = groundedResponse();
+    incomplete.status = "incomplete";
+    incomplete.incomplete_details = { reason: "max_output_tokens" };
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(incomplete)
+      .mockResolvedValueOnce(groundedResponse());
+    const client = { responses: { create } } as WebResearchClient;
+
+    const result = await runGroundedWebResearch(
+      "Compare Perth hardstand lease structures and provide a complete conclusion.",
+      { client }
+    );
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(result.responseStatus).toBe("completed");
+    expect(result.attemptCount).toBe(2);
+  });
+
+  it("fails closed when both bounded attempts are incomplete", async () => {
+    const incomplete = groundedResponse();
+    incomplete.status = "incomplete";
+    incomplete.incomplete_details = { reason: "max_output_tokens" };
+    const client = {
+      responses: { create: vi.fn().mockResolvedValue(incomplete) },
+    } as WebResearchClient;
+
+    await expect(
+      runGroundedWebResearch(
+        "Compare Perth hardstand lease structures and provide a complete conclusion.",
+        { client }
+      )
+    ).rejects.toThrow("incomplete (max_output_tokens)");
+  });
+
   it("formats retained evidence as a visible source list", () => {
     const response = groundedResponse();
     const sources = extractGroundedSources(response);
@@ -209,6 +250,7 @@ describe("grounded web research", () => {
       sources,
       model: response.model,
       responseId: response.id,
+      responseStatus: "completed",
       webSearchCallCount: 1,
       attemptCount: 1,
     });
@@ -225,7 +267,7 @@ describe("grounded web research", () => {
     });
   });
 
-  it("retains a complete model response beyond the old 6,000-character cap", () => {
+  it("retains a complete model response without a local character truncation", () => {
     const response = groundedResponse();
     const ending = "COMPLETE_RESEARCH_END";
     const summary = formatGroundedResearchSummary({
@@ -233,6 +275,7 @@ describe("grounded web research", () => {
       sources: extractGroundedSources(response),
       model: response.model,
       responseId: response.id,
+      responseStatus: "completed",
       webSearchCallCount: 1,
       attemptCount: 1,
     });

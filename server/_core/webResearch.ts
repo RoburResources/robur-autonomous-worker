@@ -2,7 +2,6 @@ import OpenAI from "openai";
 
 const DEFAULT_WEB_RESEARCH_MODEL = "gpt-5.6-luna";
 const MINIMUM_DISTINCT_SOURCES = 2;
-const MAX_RESEARCH_TEXT_LENGTH = 12_000;
 const MAX_GROUNDING_ATTEMPTS = 2;
 
 export type WebResearchSource = {
@@ -15,6 +14,7 @@ export type GroundedWebResearchResult = {
   sources: WebResearchSource[];
   model: string;
   responseId: string;
+  responseStatus: "completed";
   webSearchCallCount: number;
   attemptCount: number;
 };
@@ -22,6 +22,10 @@ export type GroundedWebResearchResult = {
 type WebResearchResponse = {
   id: string;
   model: string;
+  status: string;
+  incomplete_details?: {
+    reason?: string;
+  } | null;
   output_text?: string;
   output: Array<{
     type: string;
@@ -189,7 +193,7 @@ export function formatGroundedResearchSummary(
   const sourceList = result.sources
     .map((source, index) => `${index + 1}. ${source.title} — ${source.url}`)
     .join("\n");
-  return `findings: ${result.text.trim().slice(0, MAX_RESEARCH_TEXT_LENGTH)}\n\nSources:\n${sourceList}`;
+  return `findings: ${result.text.trim()}\n\nSources:\n${sourceList}`;
 }
 
 export async function runGroundedWebResearch(
@@ -218,6 +222,8 @@ export async function runGroundedWebResearch(
     "Do not invent names, contact details, prices, availability, approvals, or market values.",
     "Do not contact anyone or take any action outside this research response.",
     "Return concise findings, evidence, caveats, and practical next steps.",
+    "Complete the full answer within 1,200 words. Prefer a complete concise answer over an exhaustive answer that ends unfinished.",
+    "End the answer with a short Conclusion section so completion is explicit.",
     'Do not emit an "OPPORTUNITY:" instruction or create operational records; the owner must separately promote a verified finding.',
   ];
 
@@ -226,7 +232,7 @@ export async function runGroundedWebResearch(
       model,
       store: false,
       include: ["web_search_call.action.sources"],
-      max_output_tokens: 1_400,
+      max_output_tokens: 3_200,
       max_tool_calls: 4,
       tool_choice: "required",
       reasoning: { effort: "low" },
@@ -264,6 +270,12 @@ export async function runGroundedWebResearch(
     ).length;
 
     try {
+      if (response.status !== "completed") {
+        const reason = response.incomplete_details?.reason?.trim();
+        throw new GroundedResearchEvidenceError(
+          `Grounded web research response was ${response.status || "missing a completion status"}${reason ? ` (${reason})` : ""}`
+        );
+      }
       if (!text) {
         throw new GroundedResearchEvidenceError(
           "Grounded web research returned no findings"
@@ -290,6 +302,7 @@ export async function runGroundedWebResearch(
         sources,
         model: response.model || model,
         responseId: response.id,
+        responseStatus: "completed",
         webSearchCallCount,
         attemptCount: attempt,
       };

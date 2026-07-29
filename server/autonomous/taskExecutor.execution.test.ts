@@ -183,6 +183,7 @@ describe("task executor atomic owner-run path", () => {
       ],
       model: "gpt-5.6-luna",
       responseId: "resp_test",
+      responseStatus: "completed",
       webSearchCallCount: 1,
       attemptCount: 1,
     });
