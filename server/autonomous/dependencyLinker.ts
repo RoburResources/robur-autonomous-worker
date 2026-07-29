@@ -90,6 +90,16 @@ Rules:
     // Validate resolutions
     const validResolutions: DependencyResolution[] = [];
     for (const resolution of resolutions) {
+      if (
+        !resolution ||
+        typeof resolution.taskId !== "number" ||
+        !Array.isArray(resolution.dependsOn) ||
+        typeof resolution.confidence !== "number"
+      ) {
+        console.warn("[Dependency Linker] Ignoring malformed dependency resolution");
+        continue;
+      }
+
       // Check that task IDs are valid
       if (!newTasks.find((t) => t.id === resolution.taskId)) {
         console.warn(`[Dependency Linker] Invalid taskId: ${resolution.taskId}`);
