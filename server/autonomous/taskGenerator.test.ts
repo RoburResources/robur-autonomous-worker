@@ -40,7 +40,10 @@ vi.mock("../safety/privateCandidatePolicy", () => ({
   isPrivateCandidateInternalOnly: mocks.isPrivateCandidateInternalOnly,
 }));
 
-import { runTaskGenerator } from "./taskGenerator";
+import {
+  runTaskGenerator,
+  taskDescriptionsOverlap,
+} from "./taskGenerator";
 
 describe("task generator metadata persistence", () => {
   beforeEach(() => {
@@ -114,9 +117,67 @@ describe("task generator metadata persistence", () => {
       dag_dependencies: [],
       category: "research",
       generated_at: expect.any(String),
+      generation_novelty_key:
+        "australian guidance market official recovery research western",
     });
     expect(
       Object.keys(insertedTask.metadata).some(key => /^\d+$/.test(key))
+    ).toBe(false);
+  });
+
+  it("skips generation before calling the model when the private queue is full", async () => {
+    mocks.getRecentTasks.mockResolvedValue(
+      Array.from({ length: 5 }, (_, index) => ({
+        id: index + 1,
+        description: `Pending private task ${index + 1}`,
+        status: "pending",
+      }))
+    );
+
+    await expect(runTaskGenerator()).resolves.toEqual({
+      tasksCreated: 0,
+      error: "Queue already has 5 pending tasks (limit 5) — skipping generation",
+    });
+    expect(mocks.invokeLLM).not.toHaveBeenCalled();
+    expect(mocks.createTask).not.toHaveBeenCalled();
+  });
+
+  it("filters a generated description that duplicates recent work", async () => {
+    mocks.getRecentTasks.mockResolvedValue([
+      {
+        id: 90,
+        description:
+          "Research official Western Australian recovery-market guidance.",
+        status: "completed",
+      },
+    ]);
+
+    await expect(runTaskGenerator()).resolves.toEqual({ tasksCreated: 0 });
+    expect(mocks.createTask).not.toHaveBeenCalled();
+    expect(mocks.logExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: expect.objectContaining({ duplicatesFiltered: 1 }),
+      })
+    );
+  });
+});
+
+describe("task generation duplicate detection", () => {
+  it("detects reordered near-identical task descriptions", () => {
+    expect(
+      taskDescriptionsOverlap(
+        "Compile official Perth planning requirements for hardstand development and local zoning restrictions.",
+        "Research local zoning restrictions and official planning requirements for hardstand development in Perth."
+      )
+    ).toBe(true);
+  });
+
+  it("does not collapse distinct research scopes", () => {
+    expect(
+      taskDescriptionsOverlap(
+        "Research environmental assessment requirements for hardstand development.",
+        "Identify public grants available for industrial land infrastructure."
+      )
     ).toBe(false);
   });
 });

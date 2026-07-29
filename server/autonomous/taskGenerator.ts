@@ -1,9 +1,54 @@
 import { invokeLLM } from "../_core/llm";
-import { getActiveGoals, createTask, getConfig, getAllConfig, getRecentTasks, logExecution, updateTask } from "../db";
+import { getActiveGoals, createTask, getConfig, getRecentTasks, logExecution, updateTask } from "../db";
 import { linkBatchDependencies } from "./dependencyLinker";
 import { searchMemories } from "../memory/mem0";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 import { isPrivateCandidateInternalOnly } from "../safety/privateCandidatePolicy";
+
+const TASK_DESCRIPTION_STOP_WORDS = new Set([
+  "a", "an", "and", "any", "are", "as", "at", "be", "by", "for", "from",
+  "in", "into", "is", "it", "of", "on", "or", "that", "the", "their", "to",
+  "using", "with",
+]);
+
+function taskDescriptionTokens(description: string): string[] {
+  return description
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(token => token.length >= 3 && !TASK_DESCRIPTION_STOP_WORDS.has(token))
+    .map(token =>
+      token.length > 5 && token.endsWith("s") ? token.slice(0, -1) : token
+    );
+}
+
+export function taskDescriptionsOverlap(
+  candidate: string,
+  existing: string
+): boolean {
+  const candidateTokens = new Set(taskDescriptionTokens(candidate));
+  const existingTokens = new Set(taskDescriptionTokens(existing));
+  if (candidateTokens.size === 0 || existingTokens.size === 0) return false;
+
+  const candidateKey = Array.from(candidateTokens).sort().join(" ");
+  const existingKey = Array.from(existingTokens).sort().join(" ");
+  if (candidateKey === existingKey) return true;
+
+  const intersection = Array.from(candidateTokens).filter(token =>
+    existingTokens.has(token)
+  ).length;
+  const containment =
+    intersection / Math.min(candidateTokens.size, existingTokens.size);
+  const union = new Set([
+    ...Array.from(candidateTokens),
+    ...Array.from(existingTokens),
+  ]).size;
+  const jaccard = intersection / union;
+
+  return intersection >= 6 && (containment >= 0.72 || jaccard >= 0.55);
+}
 
 /**
  * Task Generator — runs every 15 minutes
@@ -28,19 +73,37 @@ export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?
       return { tasksCreated: 0, error: "No active goals" };
     }
 
-    // Get recent tasks to avoid duplication
+    const privateCandidate = isPrivateCandidateInternalOnly();
+
+    // Get recent tasks to avoid duplication and bound the live backlog.
     const recentTasks = await getRecentTasks(100);
     const recentDescriptions = recentTasks.map(t => t.description).slice(0, 30).join("\n- ");
     const pendingCount = recentTasks.filter(t => t.status === "pending").length;
 
-    // Don't over-generate — if queue already has many pending tasks, skip
-    if (pendingCount >= 30) {
-      return { tasksCreated: 0, error: `Queue already has ${pendingCount} pending tasks — skipping generation` };
-    }
-
     const model = (await getConfig("task_generation_model")) || "gpt-4o-mini";
     const maxTasksPerCycle = parseInt(await getConfig("max_tasks_per_generation_cycle") || "5");
     const minInternalRatio = parseFloat(await getConfig("min_internal_task_ratio") || "0.6");
+    const queueHighWaterMark = parseInt(
+      (await getConfig("max_pending_tasks_before_generation")) ||
+        (privateCandidate ? "5" : "30")
+    );
+    if (
+      !Number.isFinite(queueHighWaterMark) ||
+      queueHighWaterMark < 1 ||
+      pendingCount >= queueHighWaterMark
+    ) {
+      return {
+        tasksCreated: 0,
+        error:
+          !Number.isFinite(queueHighWaterMark) || queueHighWaterMark < 1
+            ? "Invalid max_pending_tasks_before_generation config"
+            : `Queue already has ${pendingCount} pending tasks (limit ${queueHighWaterMark}) — skipping generation`,
+      };
+    }
+    const generationCapacity = Math.min(
+      maxTasksPerCycle,
+      queueHighWaterMark - pendingCount
+    );
 
     // Load constitution context
     const constitution = await getConfig("constitution_principles") || "";
@@ -66,7 +129,6 @@ export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?
       `Goal [ID:${g.id}] (priority ${g.priority}): ${g.goalText}\nSub-goals: ${JSON.stringify(g.subGoals || [])}`
     ).join("\n\n");
 
-    const privateCandidate = isPrivateCandidateInternalOnly();
     const response = await invokeLLM({
       model,
       messages: [
@@ -90,7 +152,7 @@ CURRENT RESTRICTIONS:
 - External contact restriction active: ${isRestrictionActive ? "YES - all outbound calls/emails/SMS require approval" : "NO"}
 
 TASK GENERATION RULES:
-1. Generate EXACTLY ${maxTasksPerCycle} tasks maximum per cycle
+1. Generate EXACTLY ${generationCapacity} tasks maximum this cycle
 2. Minimum ${Math.round(minInternalRatio * 100)}% must be INTERNAL tasks (web_research or data_entry - no external contact)
 3. Phase 1 tasks (infrastructure, data building) take priority over Phase 2/3
 4. Each task must include ROI score (1-10), phase (1/2/3), and whether it requires external contact
@@ -108,7 +170,7 @@ Respond in JSON format with an array of task objects.`
         },
         {
           role: "user",
-          content: `Current active goals:\n${goalsContext}\n\nRecent tasks already in queue (AVOID DUPLICATING):\n- ${recentDescriptions || "None yet"}\n\nCurrent pending tasks in queue: ${pendingCount}\n\nGenerate up to ${maxTasksPerCycle} new tasks. Prioritize Phase 1 internal tasks. Focus on what can be done RIGHT NOW without external contact.`
+          content: `Current active goals:\n${goalsContext}\n\nRecent tasks already in queue (AVOID DUPLICATING):\n- ${recentDescriptions || "None yet"}\n\nCurrent pending tasks in queue: ${pendingCount}\nQueue high-water mark: ${queueHighWaterMark}\n\nGenerate up to ${generationCapacity} new tasks. Prioritize Phase 1 internal tasks. Focus on what can be done RIGHT NOW without external contact.`
         }
       ],
       response_format: {
@@ -153,7 +215,7 @@ Respond in JSON format with an array of task objects.`
     }
 
     const parsed = JSON.parse(content);
-    let tasks = (parsed.tasks || []).slice(0, maxTasksPerCycle);
+    let tasks = (parsed.tasks || []).slice(0, generationCapacity);
 
     // Enforce minimum internal ratio
     const internalTasks = tasks.filter((t: any) => !t.requiresExternalContact);
@@ -165,6 +227,26 @@ Respond in JSON format with an array of task objects.`
       const allowedExternal = tasks.length - minInternal;
       tasks = [...internalTasks, ...externalTasks.slice(0, allowedExternal)];
     }
+
+    const acceptedDescriptions: string[] = [];
+    let duplicatesFiltered = 0;
+    tasks = tasks.filter((task: any) => {
+      const description =
+        typeof task.description === "string" ? task.description.trim() : "";
+      const overlapsExisting = recentTasks.some(existing =>
+        taskDescriptionsOverlap(description, existing.description)
+      );
+      const overlapsBatch = acceptedDescriptions.some(existing =>
+        taskDescriptionsOverlap(description, existing)
+      );
+      if (!description || overlapsExisting || overlapsBatch) {
+        duplicatesFiltered++;
+        return false;
+      }
+      acceptedDescriptions.push(description);
+      task.description = description;
+      return true;
+    });
 
     let created = 0;
     const createdBatch: Array<{ id: number; description: string; dependencies: string[]; metadata: Record<string, unknown> }> = [];
@@ -183,6 +265,9 @@ Respond in JSON format with an array of task objects.`
         dag_dependencies: [],
         category: task.category,
         generated_at: new Date().toISOString(),
+        generation_novelty_key: Array.from(
+          new Set(taskDescriptionTokens(task.description))
+        ).sort().join(" "),
       };
       // dag_dependencies stores numeric task IDs for DAG-aware execution
       // dependencies stores string labels for human readability
@@ -197,11 +282,15 @@ Respond in JSON format with an array of task objects.`
         estimatedValue: String(task.estimatedValue || 0),
         metadata,
       });
-      created++;
-      const insertId = Number((insertResult as any)?.[0]?.insertId ?? (insertResult as any)?.insertId);
-      if (Number.isInteger(insertId) && insertId > 0) {
-        createdBatch.push({ id: insertId, description: task.description, dependencies: task.dependencies || [], metadata });
+      if (!insertResult) {
+        throw new Error("Task insert did not return a database result");
       }
+      const insertId = Number((insertResult as any)?.[0]?.insertId ?? (insertResult as any)?.insertId);
+      if (!Number.isInteger(insertId) || insertId <= 0) {
+        throw new Error("Task insert did not return a valid task ID");
+      }
+      created++;
+      createdBatch.push({ id: insertId, description: task.description, dependencies: task.dependencies || [], metadata });
 
     // Link dependencies within this batch (Part A of DAG resolution)
     if (createdBatch.length > 0 && createdBatch.length === tasks.length) {
@@ -237,6 +326,9 @@ Respond in JSON format with an array of task objects.`
         model,
         goalsProcessed: activeGoals.length,
         pendingBefore: pendingCount,
+        queueHighWaterMark,
+        generationCapacity,
+        duplicatesFiltered,
         internalCount: tasks.filter((t: any) => !t.requiresExternalContact).length,
         externalCount: tasks.filter((t: any) => t.requiresExternalContact).length,
       },
