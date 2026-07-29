@@ -124,11 +124,12 @@ describe("private candidate scheduler", () => {
     );
   });
 
-  it("records an executed task failure as partial instead of success", async () => {
+  it("records a scheduled task retry as an observable partial cycle", async () => {
     schedulerMocks.runTaskExecutor.mockResolvedValue({
       executed: true,
       taskId: 43,
       succeeded: false,
+      retryScheduled: true,
       error: "Research verification did not pass",
     });
 
@@ -144,7 +145,37 @@ describe("private candidate scheduler", () => {
         details: expect.objectContaining({
           executed: true,
           succeeded: false,
+          retryScheduled: true,
           taskId: 43,
+        }),
+      })
+    );
+  });
+
+  it("records post-finalization bookkeeping failure as an observable partial cycle", async () => {
+    schedulerMocks.runTaskExecutor.mockResolvedValue({
+      executed: true,
+      taskId: 44,
+      succeeded: true,
+      bookkeepingFailed: true,
+      error: "Task state was finalized, but bookkeeping failed",
+    });
+
+    await runPrivateCandidateSchedulerTick(
+      new Date("2026-07-27T12:30:00.000Z")
+    );
+
+    expect(schedulerMocks.logExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: "private_candidate_task_executor_cycle",
+        outcome: "partial",
+        errorMessage:
+          "Task state was finalized, but bookkeeping failed",
+        details: expect.objectContaining({
+          executed: true,
+          succeeded: true,
+          bookkeepingFailed: true,
+          taskId: 44,
         }),
       })
     );

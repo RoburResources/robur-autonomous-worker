@@ -1,6 +1,9 @@
 import { runEvaluator } from "./evaluator";
 import { runSelfImprover } from "./selfImprover";
-import { runTaskExecutor } from "./taskExecutor";
+import {
+  runTaskExecutor,
+  type TaskExecutorResult,
+} from "./taskExecutor";
 import { runTaskGenerator } from "./taskGenerator";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 import { privateCandidateInternalAutonomyEnabled } from "../safety/privateCandidatePolicy";
@@ -54,14 +57,7 @@ async function runJob(job: PrivateCandidateJob, slot: string): Promise<void> {
         error?: string;
       }
     | undefined;
-  let executorResult:
-    | {
-        executed: boolean;
-        taskId?: number;
-        succeeded?: boolean;
-        error?: string;
-      }
-    | undefined;
+  let executorResult: TaskExecutorResult | undefined;
   if (job === "task-generator") generatorResult = await runTaskGenerator();
   else if (job === "task-executor") executorResult = await runTaskExecutor();
   else if (job === "evaluator") await runEvaluator();
@@ -76,6 +72,8 @@ async function runJob(job: PrivateCandidateJob, slot: string): Promise<void> {
   const executorFailed =
     executorResult?.executed === true &&
     executorResult.succeeded === false;
+  const executorBookkeepingFailed =
+    executorResult?.bookkeepingFailed === true;
   const executorError = boundedSchedulerError(executorResult?.error);
   const generatorIdle =
     generatorResult?.tasksCreated === 0 &&
@@ -87,7 +85,11 @@ async function runJob(job: PrivateCandidateJob, slot: string): Promise<void> {
   const generatorFailed =
     Boolean(generatorResult?.error) && !generatorIdle;
   const generatorError = boundedSchedulerError(generatorResult?.error);
-  const jobFailed = executorBlocked || executorFailed || generatorFailed;
+  const jobFailed =
+    executorBlocked ||
+    executorFailed ||
+    executorBookkeepingFailed ||
+    generatorFailed;
   await logExecution({
     actionType: `private_candidate_${job.replace("-", "_")}_cycle`,
     details: {
@@ -98,6 +100,8 @@ async function runJob(job: PrivateCandidateJob, slot: string): Promise<void> {
         ? {
             executed: executorResult.executed,
             succeeded: executorResult.succeeded,
+            retryScheduled: executorResult.retryScheduled,
+            bookkeepingFailed: executorResult.bookkeepingFailed,
             taskId: executorResult.taskId,
             error: executorError,
             idle: executorIdle,
