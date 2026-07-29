@@ -3,6 +3,7 @@ import { getActiveGoals, createTask, getConfig, getAllConfig, getRecentTasks, lo
 import { linkBatchDependencies } from "./dependencyLinker";
 import { searchMemories } from "../memory/mem0";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
+import { isPrivateCandidateInternalOnly } from "../safety/privateCandidatePolicy";
 
 /**
  * Task Generator — runs every 15 minutes
@@ -65,6 +66,7 @@ export async function runTaskGenerator(): Promise<{ tasksCreated: number; error?
       `Goal [ID:${g.id}] (priority ${g.priority}): ${g.goalText}\nSub-goals: ${JSON.stringify(g.subGoals || [])}`
     ).join("\n\n");
 
+    const privateCandidate = isPrivateCandidateInternalOnly();
     const response = await invokeLLM({
       model,
       messages: [
@@ -96,6 +98,11 @@ TASK GENERATION RULES:
 6. Include dependency info if the task requires something else to be done first
 7. Avoid duplicating tasks already in the queue
 8. Use memory insights below to generate smarter, higher-ROI tasks${memoryContext}
+${privateCandidate ? `
+PRIVATE CANDIDATE MODE:
+- Generate only web_research tasks.
+- Each task must be a contained research or analysis objective; do not claim it updates a workflow, record, document, or external system.
+- Do not generate data_entry, contact, payment, provider, or publication work.` : ""}
 
 Respond in JSON format with an array of task objects.`
         },
@@ -161,7 +168,9 @@ Respond in JSON format with an array of task objects.`
 
     let created = 0;
     const createdBatch: Array<{ id: number; description: string; dependencies: string[]; metadata: Record<string, unknown> }> = [];
-    const validActionTypes = ["outbound_call", "send_email", "send_sms", "web_research", "data_entry"];
+    const validActionTypes = privateCandidate
+      ? ["web_research"]
+      : ["outbound_call", "send_email", "send_sms", "web_research", "data_entry"];
 
     for (const task of tasks) {
       const actionType = validActionTypes.includes(task.actionType) ? task.actionType : "web_research";

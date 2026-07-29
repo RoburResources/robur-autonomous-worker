@@ -86,6 +86,29 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
       };
     }
 
+    // A private candidate has no designated persistent data target. Treating
+    // generic prose as a completed data update causes false-success claims;
+    // hold these legacy tasks until an explicit private target is supplied.
+    if (isPrivateCandidateInternalOnly() && task.actionType === "data_entry") {
+      await updateTask(task.id, {
+        status: "awaiting_approval",
+        resultSummary:
+          "Private candidate requires an explicit private data target before data-entry execution",
+      });
+      await logExecution({
+        taskId: task.id,
+        actionType: "private_candidate_data_target_required",
+        details: { containment: "internal-only" },
+        outcome: "pending",
+        errorMessage: "No explicit private data target",
+      });
+      return {
+        executed: false,
+        taskId: task.id,
+        error: "Private candidate data target required",
+      };
+    }
+
     // ── 3. Input schema validation ────────────────────────────────────────────
     const inputValidation = validateTaskInput(task);
     if (!inputValidation.valid) {
