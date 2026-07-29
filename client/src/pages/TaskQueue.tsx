@@ -6,7 +6,14 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Eye, Play, Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
@@ -138,6 +145,10 @@ export default function TaskQueue() {
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Add research task</DialogTitle>
+                <DialogDescription>
+                  Queue an owner-authorised web research task for grounded,
+                  independently verified execution.
+                </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
                 <div>
@@ -278,6 +289,10 @@ export default function TaskQueue() {
             <DialogTitle>
               {selectedTask ? `Task #${selectedTask.id}` : "Task details"}
             </DialogTitle>
+            <DialogDescription>
+              Review the request, execution status, verified result, and linked
+              sources.
+            </DialogDescription>
           </DialogHeader>
           {selectedTask ? (
             <div className="space-y-5">
