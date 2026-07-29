@@ -23,5 +23,12 @@ describe("dependency linker", () => {
     await expect(
       linkBatchDependencies([{ id: 1, description: "internal task", dependencies: [] }])
     ).resolves.toEqual([]);
+
+    expect(mocks.invokeLLM).toHaveBeenCalledWith(expect.objectContaining({
+      response_format: expect.objectContaining({
+        type: "json_schema",
+        json_schema: expect.objectContaining({ strict: true }),
+      }),
+    }));
   });
 });
