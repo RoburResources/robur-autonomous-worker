@@ -44,7 +44,7 @@ export async function linkBatchDependencies(
 Tasks in this batch:
 ${taskSummary}
 
-For each task that has dependencies listed, determine which other tasks in the batch it depends on. Return a JSON array with:
+For each task that has dependencies listed, determine which other tasks in the batch it depends on. Return a JSON object with a resolutions array:
 [
   {
     "taskId": <number>,
@@ -59,7 +59,7 @@ Rules:
 2. A task can only depend on other tasks in this batch (IDs ${newTasks.map((t) => t.id).join(", ")}).
 3. Do not create circular dependencies.
 4. Be conservative — only create dependencies you are confident about (confidence > 0.7).
-5. Return empty array if no dependencies can be resolved.`;
+5. Return {"resolutions": []} if no dependencies can be resolved.`;
 
   try {
     const response = await invokeLLM({
@@ -70,18 +70,25 @@ Rules:
           name: "dependency_resolutions",
           strict: true,
           schema: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                taskId: { type: "number" },
-                dependsOn: { type: "array", items: { type: "number" } },
-                confidence: { type: "number" },
-                reasoning: { type: "string" },
+            type: "object",
+            properties: {
+              resolutions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    taskId: { type: "number" },
+                    dependsOn: { type: "array", items: { type: "number" } },
+                    confidence: { type: "number" },
+                    reasoning: { type: "string" },
+                  },
+                  required: ["taskId", "dependsOn", "confidence", "reasoning"],
+                  additionalProperties: false,
+                },
               },
-              required: ["taskId", "dependsOn", "confidence", "reasoning"],
-              additionalProperties: false,
             },
+            required: ["resolutions"],
+            additionalProperties: false,
           },
         },
       },
@@ -99,9 +106,10 @@ Rules:
 
     try {
       // Extract JSON from response (may be wrapped in markdown code blocks)
-      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        resolutions = JSON.parse(jsonMatch[0]);
+        const parsed = JSON.parse(jsonMatch[0]);
+        resolutions = Array.isArray(parsed?.resolutions) ? parsed.resolutions : [];
       }
     } catch (parseError) {
       console.warn("[Dependency Linker] Failed to parse LLM response:", parseError);
