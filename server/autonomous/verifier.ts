@@ -12,9 +12,8 @@ export interface VerificationResult {
 /**
  * Dual-agent verifier — runs AFTER task execution.
  *
- * Uses a stronger, independent LLM (claude-sonnet-4-6) to verify
- * whether the task actually achieved its goal and whether any
- * unintended side effects occurred.
+ * Uses the service's supported model to verify whether the task actually
+ * achieved its goal and whether any unintended side effects occurred.
  *
  * This is the LLM-as-Judge pattern: a second model that did NOT
  * participate in execution reviews the outcome objectively.
@@ -28,9 +27,10 @@ export async function verifyTaskOutcome(task: {
 }): Promise<VerificationResult> {
   try {
     const response = await invokeLLM({
-      // Deliberately use a DIFFERENT model from the executor (which uses gpt-4o-mini)
-      // to avoid same-model blind spots
-      model: "claude-sonnet-4-6",
+      // The private candidate has a verified gpt-4o-mini path. Do not select
+      // an unconfigured provider model here: an unavailable verifier must not
+      // turn otherwise successful internal work into a false failure.
+      model: "gpt-4o-mini",
       messages: [
         {
           role: "system",
