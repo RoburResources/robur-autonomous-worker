@@ -55,6 +55,14 @@ async function main(): Promise<void> {
     counts[action] = (counts[action] || 0) + 1;
     return counts;
   }, {});
+  const failedTaskDiagnostics = tasks
+    .filter(task => task.status === "failed")
+    .map(task => ({
+      id: task.id,
+      actionType: task.actionType || "unknown",
+      source: task.source || "unknown",
+      failureCategory: task.resultSummary?.split(":", 1)[0] || "unknown",
+    }));
 
   const audit = {
     safe: externalExecutions.length === 0 && dailyCalls === 0 && dailyEmails === 0,
@@ -62,6 +70,7 @@ async function main(): Promise<void> {
     executionCount: executions.length,
     taskStatusCounts,
     taskActionCounts,
+    failedTaskDiagnostics,
     externalExecutionCount: externalExecutions.length,
     dailyCallCount: dailyCalls,
     dailyEmailCount: dailyEmails,
