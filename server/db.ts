@@ -1,4 +1,14 @@
-import { eq, desc, asc, and, sql, gte, lte, like } from "drizzle-orm";
+import {
+  eq,
+  desc,
+  asc,
+  and,
+  sql,
+  gte,
+  lte,
+  like,
+  isNotNull,
+} from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createHash } from "node:crypto";
 import {
@@ -9,7 +19,7 @@ import {
   evaluations, InsertEvaluation,
   opportunities, InsertOpportunity,
   systemConfig, InsertSystemConfigEntry,
-  dailyMetrics, InsertDailyMetric,
+  dailyMetrics, DailyMetric, InsertDailyMetric,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -137,10 +147,107 @@ export async function createTask(task: InsertTask) {
   return db.insert(taskQueue).values(task);
 }
 
+export function withTaskStatusTimestamp(
+  data: Partial<InsertTask>,
+  now = new Date()
+): Partial<InsertTask> {
+  if (!data.status) return data;
+  return {
+    ...data,
+    completedAt:
+      data.status === "completed" || data.status === "failed"
+        ? data.completedAt ?? now
+        : null,
+  };
+}
+
 export async function updateTask(id: number, data: Partial<InsertTask>) {
   const db = await getDb();
   if (!db) return;
-  await db.update(taskQueue).set(data).where(eq(taskQueue.id, id));
+  await db
+    .update(taskQueue)
+    .set(withTaskStatusTimestamp(data))
+    .where(eq(taskQueue.id, id));
+}
+
+export type OwnerTaskUpdateResult =
+  | { outcome: "not_found" }
+  | {
+      outcome: "updated";
+      previousStatus: Task["status"];
+      nextStatus: Task["status"];
+      statusChanged: boolean;
+    };
+
+type OwnerTaskUpdateDatabase = Pick<
+  NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  "transaction"
+>;
+
+export async function updateTaskByOwnerWithAudit(
+  id: number,
+  data: Partial<Pick<InsertTask, "status" | "priorityScore">>,
+  databaseOverride?: OwnerTaskUpdateDatabase
+): Promise<OwnerTaskUpdateResult> {
+  const db = databaseOverride ?? await getDb();
+  if (!db) {
+    throw new Error("Database is not available");
+  }
+
+  return db.transaction(async tx => {
+    const existing = await tx
+      .select()
+      .from(taskQueue)
+      .where(eq(taskQueue.id, id))
+      .limit(1)
+      .for("update");
+    const task = existing[0];
+    if (!task) {
+      return { outcome: "not_found" };
+    }
+
+    const nextStatus = data.status ?? task.status;
+    const statusChanged = nextStatus !== task.status;
+    const updateData: Partial<InsertTask> = {};
+    if (
+      data.priorityScore !== undefined &&
+      data.priorityScore !== task.priorityScore
+    ) {
+      updateData.priorityScore = data.priorityScore;
+    }
+    if (statusChanged) {
+      Object.assign(
+        updateData,
+        withTaskStatusTimestamp({ status: nextStatus })
+      );
+    }
+    if (Object.keys(updateData).length > 0) {
+      await tx
+        .update(taskQueue)
+        .set(updateData)
+        .where(eq(taskQueue.id, id));
+    }
+
+    if (statusChanged) {
+      await tx.insert(executionLog).values({
+        taskId: id,
+        actionType: "owner_task_status_update",
+        details: {
+          previousStatus: task.status,
+          nextStatus,
+          actor: "verified_owner",
+        },
+        outcome: nextStatus === "failed" ? "failure" : "success",
+      });
+    }
+
+    return {
+      outcome: "updated",
+      previousStatus: task.status,
+      nextStatus,
+      statusChanged,
+    };
+  });
 }
 
 export async function claimPendingTask(
@@ -170,7 +277,7 @@ export async function updateClaimedTask(
   if (!db || !executionToken) return false;
   const result = await db
     .update(taskQueue)
-    .set(data)
+    .set(withTaskStatusTimestamp(data))
     .where(
       and(
         eq(taskQueue.id, id),
@@ -427,12 +534,162 @@ export async function claimPrivateCandidateJobSlot(
 
 // ─── Daily Metrics Helpers ──────────────────────────────────────────────────
 
-export async function getTodayMetrics(): Promise<any> {
+export type DailyTaskActivity = {
+  tasksGenerated: number;
+  tasksCompleted: number;
+  tasksFailed: number;
+};
+
+export type DailyTaskCountRow = {
+  date: string | null;
+  count: number | string;
+};
+
+export function mergeDailyTaskActivity(
+  generatedRows: DailyTaskCountRow[],
+  completedRows: DailyTaskCountRow[],
+  failedRows: DailyTaskCountRow[]
+): Map<string, DailyTaskActivity> {
+  const activity = new Map<string, DailyTaskActivity>();
+  const ensure = (date: string): DailyTaskActivity => {
+    const existing = activity.get(date);
+    if (existing) return existing;
+    const created = {
+      tasksGenerated: 0,
+      tasksCompleted: 0,
+      tasksFailed: 0,
+    };
+    activity.set(date, created);
+    return created;
+  };
+  const apply = (
+    rows: DailyTaskCountRow[],
+    key: keyof DailyTaskActivity
+  ) => {
+    for (const row of rows) {
+      if (!row.date || !/^\d{4}-\d{2}-\d{2}$/.test(row.date)) continue;
+      const count = Number(row.count);
+      if (!Number.isFinite(count) || count < 0) continue;
+      ensure(row.date)[key] = count;
+    }
+  };
+  apply(generatedRows, "tasksGenerated");
+  apply(completedRows, "tasksCompleted");
+  apply(failedRows, "tasksFailed");
+  return activity;
+}
+
+async function getDailyTaskActivity(
+  since: Date
+): Promise<Map<string, DailyTaskActivity>> {
+  const db = await getDb();
+  if (!db) return new Map();
+
+  const sinceEpoch = Math.floor(since.getTime() / 1000);
+  const sinceInstant = sql`from_unixtime(${sinceEpoch})`;
+  const generatedDate =
+    sql<string>`date_format(convert_tz(${taskQueue.createdAt}, @@session.time_zone, '+00:00'), '%Y-%m-%d')`;
+  const completedDate =
+    sql<string>`date_format(convert_tz(${taskQueue.completedAt}, @@session.time_zone, '+00:00'), '%Y-%m-%d')`;
+  const failedDate =
+    sql<string>`date_format(convert_tz(${executionLog.createdAt}, @@session.time_zone, '+00:00'), '%Y-%m-%d')`;
+  const [generatedRows, completedRows, failedRows] = await Promise.all([
+    db
+      .select({
+        date: generatedDate,
+        count: sql<number>`count(*)`,
+      })
+      .from(taskQueue)
+      .where(
+        and(
+          eq(taskQueue.source, "task_generator"),
+          sql`${taskQueue.createdAt} >= ${sinceInstant}`
+        )
+      )
+      .groupBy(generatedDate),
+    db
+      .select({
+        date: completedDate,
+        count: sql<number>`count(*)`,
+      })
+      .from(taskQueue)
+      .where(
+        and(
+          eq(taskQueue.status, "completed"),
+          isNotNull(taskQueue.completedAt),
+          sql`${taskQueue.completedAt} >= ${sinceInstant}`
+        )
+      )
+      .groupBy(completedDate),
+    db
+      .select({
+        date: failedDate,
+        count: sql<number>`count(distinct ${executionLog.taskId})`,
+      })
+      .from(executionLog)
+      .where(
+        and(
+          eq(executionLog.outcome, "failure"),
+          isNotNull(executionLog.taskId),
+          sql`${executionLog.createdAt} >= ${sinceInstant}`
+        )
+      )
+      .groupBy(failedDate),
+  ]);
+  return mergeDailyTaskActivity(generatedRows, completedRows, failedRows);
+}
+
+export function withTaskActivity(
+  row: DailyMetric | undefined,
+  date: string,
+  activity: DailyTaskActivity | undefined
+): DailyMetric {
+  return {
+    ...(row || {
+      id: 0,
+      date,
+      tasksGenerated: 0,
+      tasksCompleted: 0,
+      tasksFailed: 0,
+      callsMade: 0,
+      emailsSent: 0,
+      smsSent: 0,
+      apiSpendCents: 0,
+      successRate: null,
+      createdAt: new Date(`${date}T00:00:00.000Z`),
+    }),
+    tasksGenerated: activity?.tasksGenerated || 0,
+    tasksCompleted: activity?.tasksCompleted || 0,
+    tasksFailed: activity?.tasksFailed || 0,
+  };
+}
+
+export async function getTodayMetrics(): Promise<DailyMetric | null> {
   const db = await getDb();
   if (!db) return null;
   const today = new Date().toISOString().split("T")[0];
-  const results = await db.select().from(dailyMetrics).where(eq(dailyMetrics.date, today)).limit(1);
-  return results[0] || null;
+  const since = new Date(`${today}T00:00:00.000Z`);
+  const [results, taskActivity] = await Promise.all([
+    db
+      .select()
+      .from(dailyMetrics)
+      .where(eq(dailyMetrics.date, today))
+      .limit(1),
+    getDailyTaskActivity(since),
+  ]);
+  return withTaskActivity(results[0], today, taskActivity.get(today));
+}
+
+export async function getTodayApiSpendCents(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const today = new Date().toISOString().split("T")[0];
+  const results = await db
+    .select({ apiSpendCents: dailyMetrics.apiSpendCents })
+    .from(dailyMetrics)
+    .where(eq(dailyMetrics.date, today))
+    .limit(1);
+  return results[0]?.apiSpendCents || 0;
 }
 
 export async function upsertDailyMetrics(date: string, data: Partial<InsertDailyMetric>) {
@@ -449,7 +706,30 @@ export async function upsertDailyMetrics(date: string, data: Partial<InsertDaily
 export async function getRecentMetrics(days = 30) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(dailyMetrics).orderBy(desc(dailyMetrics.date)).limit(days);
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  start.setUTCDate(start.getUTCDate() - Math.max(0, days - 1));
+  const firstDate = start.toISOString().split("T")[0];
+  const [storedRows, taskActivity] = await Promise.all([
+    db
+      .select()
+      .from(dailyMetrics)
+      .where(gte(dailyMetrics.date, firstDate))
+      .orderBy(desc(dailyMetrics.date))
+      .limit(days),
+    getDailyTaskActivity(start),
+  ]);
+  const storedByDate = new Map(storedRows.map(row => [row.date, row]));
+  const dates = new Set([
+    ...Array.from(storedByDate.keys()),
+    ...Array.from(taskActivity.keys()),
+  ]);
+  return Array.from(dates)
+    .sort((left, right) => right.localeCompare(left))
+    .slice(0, days)
+    .map(date =>
+      withTaskActivity(storedByDate.get(date), date, taskActivity.get(date))
+    );
 }
 
 // ─── Safety Check Helpers ───────────────────────────────────────────────────

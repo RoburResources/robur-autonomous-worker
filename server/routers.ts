@@ -12,7 +12,7 @@ import {
 } from "./safety/legacyWorkerGate";
 import {
   getAllGoals, getActiveGoals, createGoal, updateGoal,
-  getRecentTasks, getTasksByStatus, updateTask, createTask,
+  getRecentTasks, getTasksByStatus, updateTaskByOwnerWithAudit, createTask,
   getRecentExecutions, getExecutionsForTask,
   getRecentEvaluations,
   getOpportunities, createOpportunity, updateOpportunity,
@@ -96,10 +96,19 @@ export const appRouter = router({
         id: z.number().int().positive(),
         status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled", "awaiting_approval"]).optional(),
         priorityScore: z.number().int().min(1).max(100).optional(),
-      }))
+      }).refine(
+        input => input.status !== undefined || input.priorityScore !== undefined,
+        { message: "A status or priority update is required" }
+      ))
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
-        await updateTask(id, data);
+        const result = await updateTaskByOwnerWithAudit(id, data);
+        if (result.outcome === "not_found") {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Task not found",
+          });
+        }
         return { success: true };
       }),
     create: ownerProcedure

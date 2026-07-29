@@ -1,4 +1,15 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, json, decimal, boolean } from "drizzle-orm/mysql-core";
+import {
+  int,
+  mysqlEnum,
+  mysqlTable,
+  text,
+  timestamp,
+  varchar,
+  json,
+  decimal,
+  boolean,
+  index,
+} from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -53,7 +64,10 @@ export const taskQueue = mysqlTable("task_queue", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   completedAt: timestamp("completedAt"),
-});
+}, table => [
+  index("task_source_created_idx").on(table.source, table.createdAt),
+  index("task_status_completed_idx").on(table.status, table.completedAt),
+]);
 
 export type Task = typeof taskQueue.$inferSelect;
 export type InsertTask = typeof taskQueue.$inferInsert;
@@ -71,7 +85,13 @@ export const executionLog = mysqlTable("execution_log", {
   durationMs: int("durationMs"),
   tokensCost: int("tokensCost"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [
+  index("execution_outcome_created_task_idx").on(
+    table.outcome,
+    table.createdAt,
+    table.taskId
+  ),
+]);
 
 export type ExecutionLogEntry = typeof executionLog.$inferSelect;
 export type InsertExecutionLogEntry = typeof executionLog.$inferInsert;

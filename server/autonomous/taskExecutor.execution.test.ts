@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   getDailyCallCount: vi.fn(),
   getDailyEmailCount: vi.fn(),
   upsertDailyMetrics: vi.fn(),
-  getTodayMetrics: vi.fn(),
+  getTodayApiSpendCents: vi.fn(),
   updateTask: vi.fn(),
   logExecution: vi.fn(),
   getTaskById: vi.fn(),
@@ -47,7 +47,7 @@ vi.mock("../db", () => ({
   getDailyCallCount: mocks.getDailyCallCount,
   getDailyEmailCount: mocks.getDailyEmailCount,
   upsertDailyMetrics: mocks.upsertDailyMetrics,
-  getTodayMetrics: mocks.getTodayMetrics,
+  getTodayApiSpendCents: mocks.getTodayApiSpendCents,
   updateTask: mocks.updateTask,
   logExecution: mocks.logExecution,
   getTaskById: mocks.getTaskById,
@@ -129,7 +129,7 @@ describe("task executor atomic owner-run path", () => {
     mocks.storeTaskOutcome.mockResolvedValue(undefined);
     mocks.storeContactInteraction.mockResolvedValue(undefined);
     mocks.recordVariantOutcome.mockResolvedValue(undefined);
-    mocks.getTodayMetrics.mockResolvedValue({ apiSpendCents: 0 });
+    mocks.getTodayApiSpendCents.mockResolvedValue(0);
     mocks.getDailyCallCount.mockResolvedValue(0);
     mocks.getDailyEmailCount.mockResolvedValue(0);
     mocks.getConfig.mockImplementation(async (key: string) => {

@@ -5,7 +5,7 @@ import {
 } from "./dagEngine";
 import {
   getConfig, setConfig, isKillSwitchActive, getDailyCallCount, getDailyEmailCount,
-  upsertDailyMetrics, getTodayMetrics, updateTask, logExecution, getTaskById,
+  upsertDailyMetrics, getTodayApiSpendCents, updateTask, logExecution, getTaskById,
   claimPendingTask, requeueStaleInProgressTasks, updateClaimedTask
 } from "../db";
 import { makeOutboundCall } from "../integrations/retell";
@@ -87,8 +87,8 @@ export async function runTaskExecutor(
     }
 
     const maxApiSpendCents = parseInt(await getConfig("max_api_spend_cents_per_day") || "5000");
-    const todayMetricsData = await getTodayMetrics();
-    if (todayMetricsData && todayMetricsData.apiSpendCents >= maxApiSpendCents) {
+    const todayApiSpendCents = await getTodayApiSpendCents();
+    if (todayApiSpendCents >= maxApiSpendCents) {
       return { executed: false, error: `Daily API spend cap reached ($${(maxApiSpendCents / 100).toFixed(0)})` };
     }
 
@@ -551,8 +551,7 @@ export async function runTaskExecutor(
     // accounting deliberately conservative so the daily cap fails closed.
     const estimatedSpendCents = task.actionType === "web_research" ? 10 : 2;
     const todayDate = new Date().toISOString().split("T")[0];
-    const currentMetrics = await getTodayMetrics();
-    const currentSpend = currentMetrics?.apiSpendCents || 0;
+    const currentSpend = await getTodayApiSpendCents();
     await upsertDailyMetrics(todayDate, {
       apiSpendCents: currentSpend + estimatedSpendCents,
     });
@@ -573,13 +572,11 @@ export async function runTaskExecutor(
       durationMs,
     });
 
-    // Update daily metrics
+    // Task counts are derived from canonical task/execution records. Avoid
+    // opportunistic counter writes that can overwrite the real daily totals.
     if (result.success) {
-      await upsertDailyMetrics(todayDate, { tasksCompleted: 1 });
       // Unlock DAG dependents
       await unlockDependents(task.id);
-    } else {
-      await upsertDailyMetrics(todayDate, { tasksFailed: 1 });
     }
 
     // Store task outcome in Mem0 memory for future reference
