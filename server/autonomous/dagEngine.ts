@@ -18,6 +18,15 @@ export interface DagReadinessResult {
   blockedByDescriptions: string[];
 }
 
+export function orderPendingTasksForExecution<
+  T extends { id: number; priorityScore: number },
+>(tasks: T[]): T[] {
+  return [...tasks].sort(
+    (left, right) =>
+      right.priorityScore - left.priorityScore || right.id - left.id
+  );
+}
+
 /**
  * DAG Dependency Graph Engine
  *
@@ -107,15 +116,16 @@ export async function getDagReadyTask(): Promise<{
   const db = await getDb();
   if (!db) return null;
 
-  // Get all pending tasks ordered by priority
+  // Fetch pending tasks, then apply an explicit stable tie-breaker in-process.
+  // Relying on a database's incidental row order and reversing it made equal
+  // priority selection vary across engines and restarts.
   const pendingTasks = await db
     .select()
     .from(taskQueue)
-    .where(eq(taskQueue.status, "pending"))
-    .orderBy(taskQueue.priorityScore);
+    .where(eq(taskQueue.status, "pending"));
 
   // Find the first one that is DAG-ready
-  for (const task of pendingTasks.reverse()) {  // highest priority first
+  for (const task of orderPendingTasksForExecution(pendingTasks)) {
     const readiness = await checkDagReadiness(task);
     if (readiness.isReady) {
       return task as any;
