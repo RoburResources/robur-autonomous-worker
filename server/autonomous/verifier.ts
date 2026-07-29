@@ -67,7 +67,11 @@ Score 1.0 = perfect success, 0.0 = complete failure.
 Keep the fields internally consistent:
 - verified=true requires verdict=pass, recommendedAction=accept, no unintended side effects, and score at least 0.8.
 - verdict=partial or recommendedAction=retry means verified=false.
-- For a research task, a comprehensive source-backed finding that requested information is not publicly disclosed can still be a complete pass when the limitation is explicit. Do not require private facts or outside contact to call that research complete.`,
+- For a research task, judge the scope actually requested rather than imposing an impossible exhaustive or statistically representative standard.
+- A complete analysis of accessible public evidence can pass when it answers the objective, supports material claims with citations, distinguishes direct evidence from inference, and clearly states limitations or unavailable data.
+- Do not penalize honest caveats or require private submissions, undisclosed records, outside contact, or statistically representative sentiment unless the task explicitly requires them.
+- Recommend retry only when the result omits reasonably discoverable evidence or fails to answer the stated task, not merely because additional evidence could improve confidence.
+- A comprehensive source-backed finding that requested information is not publicly disclosed can still be a complete pass when the limitation is explicit.`,
         },
         {
           role: "user",

@@ -35,6 +35,17 @@ describe("task verifier", () => {
       verdict: "pass",
     });
     expect(mocks.invokeLLM).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4o-mini" }));
+    const verificationRequest = mocks.invokeLLM.mock.calls[0][0];
+    const systemPrompt = verificationRequest.messages[0].content;
+    expect(systemPrompt).toContain(
+      "judge the scope actually requested rather than imposing an impossible exhaustive"
+    );
+    expect(systemPrompt).toContain(
+      "Do not penalize honest caveats or require private submissions"
+    );
+    expect(systemPrompt).toContain(
+      "not merely because additional evidence could improve confidence"
+    );
   });
 
   it("fails closed on a contradictory partial retry verdict", () => {
