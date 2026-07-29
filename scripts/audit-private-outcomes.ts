@@ -71,6 +71,8 @@ async function main(): Promise<void> {
       actionType: task.actionType || "unknown",
       source: task.source || "unknown",
       failureCategory: classifyFailure(task.resultSummary),
+      description: task.description.slice(0, 160),
+      failureSummary: task.resultSummary?.slice(0, 480) || null,
     }));
 
   const audit = {
