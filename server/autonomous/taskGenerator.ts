@@ -195,15 +195,7 @@ Respond in JSON format with an array of task objects.`
         assignedAgent: "autonomous_worker",
         actionType,
         estimatedValue: String(task.estimatedValue || 0),
-        metadata: JSON.stringify({
-          roiScore: task.roiScore,
-          phase: task.phase,
-          requiresExternalContact: task.requiresExternalContact,
-          dependencies: task.dependencies || [],
-          dag_dependencies: [],  // numeric task IDs — populated when explicit task dependencies are known
-          category: task.category,
-          generated_at: new Date().toISOString(),
-        }),
+        metadata,
       });
       created++;
       const insertId = Number((insertResult as any)?.[0]?.insertId ?? (insertResult as any)?.insertId);

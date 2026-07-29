@@ -26,6 +26,7 @@ import {
   formatGroundedResearchSummary,
   runGroundedWebResearch,
 } from "../_core/webResearch";
+import { normalizeTaskMetadata } from "./taskMetadata";
 
 type ActionExecutionResult = {
   success: boolean;
@@ -92,10 +93,10 @@ export async function runTaskExecutor(
     }
 
     // ── 2. DAG-aware task selection ───────────────────────────────────────────
-    const task = requestedTaskId
+    const selectedTask = requestedTaskId
       ? await getTaskById(requestedTaskId)
       : await getDagReadyTask();
-    if (!task) {
+    if (!selectedTask) {
       return {
         executed: false,
         error: requestedTaskId
@@ -103,6 +104,10 @@ export async function runTaskExecutor(
           : "No DAG-ready pending tasks",
       };
     }
+    const task = {
+      ...selectedTask,
+      metadata: normalizeTaskMetadata(selectedTask.metadata),
+    };
     if (task.status !== "pending") {
       return {
         executed: false,

@@ -1,6 +1,7 @@
 import { getDb } from "../db";
 import { taskQueue } from "../../drizzle/schema";
 import { eq, and, inArray } from "drizzle-orm";
+import { normalizeTaskMetadata } from "./taskMetadata";
 
 export interface DagNode {
   taskId: number;
@@ -34,7 +35,7 @@ export async function checkDagReadiness(task: {
   id: number;
   metadata?: unknown;
 }): Promise<DagReadinessResult> {
-  const meta = task.metadata as Record<string, unknown> | null;
+  const meta = normalizeTaskMetadata(task.metadata);
   const dependencies: number[] = (meta?.dag_dependencies as number[]) || [];
 
   if (dependencies.length === 0) {
@@ -141,7 +142,7 @@ export async function unlockDependents(completedTaskId: number): Promise<number[
   const unlocked: number[] = [];
 
   for (const task of allPending) {
-    const meta = task.metadata as Record<string, unknown> | null;
+    const meta = normalizeTaskMetadata(task.metadata);
     const deps: number[] = (meta?.dag_dependencies as number[]) || [];
 
     if (deps.includes(completedTaskId)) {
@@ -172,7 +173,7 @@ export async function validateNoCycle(
   const depMap = new Map<number, number[]>();
 
   for (const t of allTasks) {
-    const meta = t.metadata as Record<string, unknown> | null;
+    const meta = normalizeTaskMetadata(t.metadata);
     depMap.set(t.id, (meta?.dag_dependencies as number[]) || []);
   }
 

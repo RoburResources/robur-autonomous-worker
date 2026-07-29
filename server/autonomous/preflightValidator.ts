@@ -1,5 +1,6 @@
 import { getConfig } from "../db";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
+import { normalizeTaskMetadata } from "./taskMetadata";
 
 export interface PreflightResult {
   canExecute: boolean;
@@ -58,7 +59,7 @@ export async function runPreflightValidation(task: any): Promise<PreflightResult
   }
 
   // ── 4. Check dependency blockers from metadata ────────────────────────────
-  const meta = task.metadata as any;
+  const meta = normalizeTaskMetadata(task.metadata);
   if (meta?.blocker) {
     return { canExecute: false, blockedReason: `Task blocked: ${meta.blocker}` };
   }

@@ -258,6 +258,46 @@ describe("task executor atomic owner-run path", () => {
     );
   });
 
+  it("self-heals legacy JSON-string metadata before execution", async () => {
+    const legacyMetadata = {
+      roiScore: 6,
+      phase: 1,
+      requiresExternalContact: false,
+      dependencies: [],
+      dag_dependencies: [],
+      category: "research",
+    };
+    mocks.getTaskById.mockResolvedValue({
+      ...task,
+      metadata: JSON.stringify(legacyMetadata),
+    });
+    mocks.claimPendingTask.mockResolvedValue(true);
+
+    await expect(runTaskExecutor(task.id)).resolves.toEqual({
+      executed: true,
+      taskId: task.id,
+      succeeded: true,
+    });
+
+    expect(mocks.checkDagReadiness).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: legacyMetadata })
+    );
+    expect(mocks.runPreflightValidation).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: legacyMetadata })
+    );
+
+    const finalUpdate = mocks.updateClaimedTask.mock.calls[0][2];
+    expect(finalUpdate.metadata).toEqual(
+      expect.objectContaining({
+        ...legacyMetadata,
+        output_schema_valid: true,
+      })
+    );
+    expect(
+      Object.keys(finalUpdate.metadata).some(key => /^\d+$/.test(key))
+    ).toBe(false);
+  });
+
   it("discards a stale result when its fencing token no longer owns the task", async () => {
     mocks.claimPendingTask.mockResolvedValue(true);
     mocks.updateClaimedTask.mockResolvedValue(false);
