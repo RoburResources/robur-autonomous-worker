@@ -3,7 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes } from "./oauth";
+import { registerOwnerAccessRoutes } from "./ownerAccess";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -103,7 +103,7 @@ async function startServer() {
   app.use("/api/trpc", requireSameOriginMutation);
   app.use("/api/webhooks", blockPrivateCandidateProviderIngress);
   registerStorageProxy(app);
-  registerOAuthRoutes(app);
+  registerOwnerAccessRoutes(app);
 
   // ─── Scheduled Cron Endpoints ─────────────────────────────────────────────
   // These MUST be mounted before the Vite/static fallthrough

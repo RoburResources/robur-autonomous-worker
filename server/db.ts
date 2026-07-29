@@ -266,6 +266,34 @@ export async function claimInboundSms(messageSid: string): Promise<boolean> {
 }
 
 /**
+ * Atomically consumes a private-owner bootstrap token across deployments.
+ * Only a SHA-256 digest is stored; the credential itself is never persisted.
+ */
+export async function claimPrivateOwnerAccessToken(
+  jti: string,
+  expiresAt: Date
+): Promise<boolean> {
+  if (!jti || jti.length > 256 || !Number.isFinite(expiresAt.getTime())) {
+    return false;
+  }
+  const db = await getDb();
+  if (!db) return false;
+
+  const digest = createHash("sha256").update(jti, "utf8").digest("hex");
+  try {
+    await db.insert(systemConfig).values({
+      key: `private_owner_access_${digest}`,
+      value: expiresAt.toISOString(),
+      description: "Consumed one-time private owner access credential",
+    });
+    return true;
+  } catch (error) {
+    if (isMysqlDuplicateKeyError(error)) return false;
+    throw error;
+  }
+}
+
+/**
  * Atomically claims one scheduler job/time slot across every live instance.
  * Railway can briefly run old and new instances together during a deployment,
  * so process-local timers alone cannot prevent a duplicate cycle.

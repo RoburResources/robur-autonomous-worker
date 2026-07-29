@@ -19,7 +19,6 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard, ListTodo, ScrollText, Target,
@@ -28,7 +27,6 @@ import {
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
-import { Button } from "./ui/button";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
@@ -54,8 +52,6 @@ export default function DashboardLayout({
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
   });
   const { loading, user } = useAuth();
-  const loginUrl = getLoginUrl();
-
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
   }, [sidebarWidth]);
@@ -73,20 +69,8 @@ export default function DashboardLayout({
             <h1 className="text-2xl font-bold tracking-tight">Robur Autonomous Worker</h1>
           </div>
           <p className="text-sm text-muted-foreground text-center max-w-sm">
-            {loginUrl
-              ? "Sign in to access the autonomous operations dashboard."
-              : "Owner access is available only through the private authenticated session."}
+            Owner access is available only through the private access link.
           </p>
-          <Button
-            onClick={() => {
-              if (loginUrl) window.location.href = loginUrl;
-            }}
-            disabled={!loginUrl}
-            size="lg"
-            className="w-full"
-          >
-            {loginUrl ? "Sign in" : "Private owner access only"}
-          </Button>
         </div>
       </div>
     );
