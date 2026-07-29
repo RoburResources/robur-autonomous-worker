@@ -14,6 +14,16 @@ export type PrivateCandidateJob =
 
 const lastRunSlots = new Map<PrivateCandidateJob, string>();
 let tickInFlight = false;
+const MAX_SCHEDULER_ERROR_LENGTH = 1_000;
+
+function boundedSchedulerError(value: string | undefined): string | undefined {
+  const message = value?.trim();
+  if (!message || message.length <= MAX_SCHEDULER_ERROR_LENGTH) {
+    return message;
+  }
+  const suffix = "… [truncated]";
+  return `${message.slice(0, MAX_SCHEDULER_ERROR_LENGTH - suffix.length)}${suffix}`;
+}
 
 export function getPrivateCandidateDueJobs(now: Date): PrivateCandidateJob[] {
   const minute = now.getUTCMinutes();
@@ -60,6 +70,7 @@ async function runJob(job: PrivateCandidateJob): Promise<void> {
   const executorFailed =
     executorResult?.executed === true &&
     executorResult.succeeded === false;
+  const executorError = boundedSchedulerError(executorResult?.error);
   await logExecution({
     actionType: `private_candidate_${job.replace("-", "_")}_cycle`,
     details: {
@@ -70,7 +81,7 @@ async function runJob(job: PrivateCandidateJob): Promise<void> {
             executed: executorResult.executed,
             succeeded: executorResult.succeeded,
             taskId: executorResult.taskId,
-            error: executorResult.error,
+            error: executorError,
             idle: executorIdle,
           }
         : {}),
@@ -78,7 +89,7 @@ async function runJob(job: PrivateCandidateJob): Promise<void> {
     },
     outcome: executorBlocked || executorFailed ? "partial" : "success",
     errorMessage:
-      executorBlocked || executorFailed ? executorResult?.error : undefined,
+      executorBlocked || executorFailed ? executorError : undefined,
   });
 }
 
@@ -106,8 +117,9 @@ export async function runPrivateCandidateSchedulerTick(
         await runJob(job);
         console.log(`[Private Candidate] Completed internal ${job} cycle`);
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Unknown scheduler failure";
+        const message = boundedSchedulerError(
+          error instanceof Error ? error.message : "Unknown scheduler failure"
+        );
         await logExecution({
           actionType: `private_candidate_${job.replace("-", "_")}_cycle`,
           details: {
@@ -117,7 +129,7 @@ export async function runPrivateCandidateSchedulerTick(
             completedAt: new Date().toISOString(),
           },
           outcome: "failure",
-          errorMessage: message,
+          errorMessage: message || "Unknown scheduler failure",
         }).catch(logError => {
           console.error(
             `[Private Candidate] Could not persist ${job} failure`,

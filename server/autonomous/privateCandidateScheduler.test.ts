@@ -147,6 +147,26 @@ describe("private candidate scheduler", () => {
     );
   });
 
+  it("bounds duplicated task failure text in scheduler receipts", async () => {
+    const longFailure = `Research verification did not pass: ${"evidence ".repeat(400)}`;
+    schedulerMocks.runTaskExecutor.mockResolvedValue({
+      executed: true,
+      taskId: 74,
+      succeeded: false,
+      error: longFailure,
+    });
+
+    await runPrivateCandidateSchedulerTick(
+      new Date("2026-07-27T13:15:00.000Z")
+    );
+
+    const receipt = schedulerMocks.logExecution.mock.calls[0][0];
+    expect(receipt.errorMessage.length).toBeLessThanOrEqual(1_000);
+    expect(receipt.errorMessage).toMatch(/\[truncated\]$/);
+    expect(receipt.details.error).toBe(receipt.errorMessage);
+    expect(receipt.details.error).not.toContain(longFailure);
+  });
+
   it("durably records a thrown executor job as failure", async () => {
     schedulerMocks.runTaskExecutor.mockRejectedValue(
       new Error("database connection lost")
