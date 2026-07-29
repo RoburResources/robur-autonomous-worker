@@ -1,5 +1,5 @@
 import { invokeLLM } from "../_core/llm";
-import { getActiveGoals, createTask, getConfig, getAllConfig, getRecentTasks, logExecution } from "../db";
+import { getActiveGoals, createTask, getConfig, getAllConfig, getRecentTasks, logExecution, updateTask } from "../db";
 import { linkBatchDependencies } from "./dependencyLinker";
 import { searchMemories } from "../memory/mem0";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
@@ -160,14 +160,24 @@ Respond in JSON format with an array of task objects.`
     }
 
     let created = 0;
+    const createdBatch: Array<{ id: number; description: string; dependencies: string[]; metadata: Record<string, unknown> }> = [];
     const validActionTypes = ["outbound_call", "send_email", "send_sms", "web_research", "data_entry"];
 
     for (const task of tasks) {
       const actionType = validActionTypes.includes(task.actionType) ? task.actionType : "web_research";
 
+      const metadata = {
+        roiScore: task.roiScore,
+        phase: task.phase,
+        requiresExternalContact: task.requiresExternalContact,
+        dependencies: task.dependencies || [],
+        dag_dependencies: [],
+        category: task.category,
+        generated_at: new Date().toISOString(),
+      };
       // dag_dependencies stores numeric task IDs for DAG-aware execution
       // dependencies stores string labels for human readability
-      await createTask({
+      const insertResult = await createTask({
         goalId: task.goalId,
         source: "task_generator",
         description: task.description,
@@ -187,15 +197,28 @@ Respond in JSON format with an array of task objects.`
         }),
       });
       created++;
+      const insertId = Number((insertResult as any)?.[0]?.insertId ?? (insertResult as any)?.insertId);
+      if (Number.isInteger(insertId) && insertId > 0) {
+        createdBatch.push({ id: insertId, description: task.description, dependencies: task.dependencies || [], metadata });
+      }
 
     // Link dependencies within this batch (Part A of DAG resolution)
-    if (tasks.length > 0) {
+    if (createdBatch.length > 0 && createdBatch.length === tasks.length) {
       try {
-        const batchTasks = tasks.map((t: any) => ({
+        const batchTasks = createdBatch.map(t => ({
+          id: t.id,
           description: t.description,
-          dependencies: t.dependencies || [],
+          dependencies: t.dependencies,
         }));
         const resolutions = await linkBatchDependencies(batchTasks);
+        for (const resolution of resolutions) {
+          const task = createdBatch.find(entry => entry.id === resolution.taskId);
+          if (task) {
+            await updateTask(task.id, {
+              metadata: { ...task.metadata, dag_dependencies: resolution.dependsOn },
+            });
+          }
+        }
         if (resolutions.length > 0) {
           console.log(`[Task Generator] Linked ${resolutions.length} batch dependencies`);
         }
