@@ -143,6 +143,88 @@ export async function updateTask(id: number, data: Partial<InsertTask>) {
   await db.update(taskQueue).set(data).where(eq(taskQueue.id, id));
 }
 
+export async function claimPendingTask(
+  id: number,
+  executionToken: string
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  if (!executionToken) return false;
+  const result = await db
+    .update(taskQueue)
+    .set({
+      status: "in_progress",
+      metadata: sql`JSON_SET(COALESCE(${taskQueue.metadata}, JSON_OBJECT()), '$.execution_claim_token', ${executionToken}, '$.execution_claimed_at', ${new Date().toISOString()})`,
+    })
+    .where(and(eq(taskQueue.id, id), eq(taskQueue.status, "pending")));
+  const driverResult = (result as any)?.[0] ?? result;
+  return Number(driverResult?.affectedRows ?? driverResult?.rowsAffected ?? 0) === 1;
+}
+
+export async function updateClaimedTask(
+  id: number,
+  executionToken: string,
+  data: Partial<InsertTask>
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db || !executionToken) return false;
+  const result = await db
+    .update(taskQueue)
+    .set(data)
+    .where(
+      and(
+        eq(taskQueue.id, id),
+        eq(taskQueue.status, "in_progress"),
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${taskQueue.metadata}, '$.execution_claim_token')) = ${executionToken}`
+      )
+    );
+  const driverResult = (result as any)?.[0] ?? result;
+  return Number(driverResult?.affectedRows ?? driverResult?.rowsAffected ?? 0) === 1;
+}
+
+export async function requeueStaleInProgressTasks(
+  staleBefore: Date
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const staleTasks = await db
+    .select({ id: taskQueue.id })
+    .from(taskQueue)
+    .where(
+      and(
+        eq(taskQueue.status, "in_progress"),
+        lte(taskQueue.updatedAt, staleBefore)
+      )
+    );
+  const recovered: number[] = [];
+  for (const task of staleTasks) {
+    const result = await db
+      .update(taskQueue)
+      .set({
+        status: "pending",
+        resultSummary:
+          "Recovered automatically after an interrupted execution lease expired",
+        completedAt: null,
+        metadata: sql`JSON_REMOVE(COALESCE(${taskQueue.metadata}, JSON_OBJECT()), '$.execution_claim_token', '$.execution_claimed_at')`,
+      })
+      .where(
+        and(
+          eq(taskQueue.id, task.id),
+          eq(taskQueue.status, "in_progress"),
+          lte(taskQueue.updatedAt, staleBefore)
+        )
+      );
+    const driverResult = (result as any)?.[0] ?? result;
+    if (
+      Number(driverResult?.affectedRows ?? driverResult?.rowsAffected ?? 0) ===
+      1
+    ) {
+      recovered.push(task.id);
+    }
+  }
+  return recovered;
+}
+
 export async function getRecentTasks(limit = 100) {
   const db = await getDb();
   if (!db) return [];

@@ -25,4 +25,25 @@ describe("owner-only dashboard reads", () => {
 
     await expect(invoke(caller)).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
+
+  it.each([
+    [
+      "tasks.create",
+      (caller: ReturnType<typeof appRouter.createCaller>) =>
+        caller.tasks.create({
+          description: "Research official Western Australian planning guidance",
+          actionType: "web_research",
+          priorityScore: 80,
+        }),
+    ],
+    [
+      "tasks.run",
+      (caller: ReturnType<typeof appRouter.createCaller>) =>
+        caller.tasks.run({ id: 1 }),
+    ],
+  ])("rejects anonymous access to %s", async (_name, invoke) => {
+    const caller = appRouter.createCaller(anonymousContext());
+
+    await expect(invoke(caller)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
 });

@@ -1,10 +1,12 @@
 import { invokeLLM } from "../_core/llm";
+import { randomUUID } from "node:crypto";
 import {
   getDagReadyTask, checkDagReadiness, unlockDependents
 } from "./dagEngine";
 import {
   getConfig, setConfig, isKillSwitchActive, getDailyCallCount, getDailyEmailCount,
-  upsertDailyMetrics, getTodayMetrics, updateTask, logExecution
+  upsertDailyMetrics, getTodayMetrics, updateTask, logExecution, getTaskById,
+  claimPendingTask, requeueStaleInProgressTasks, updateClaimedTask
 } from "../db";
 import { makeOutboundCall } from "../integrations/retell";
 import { sendSMS } from "../integrations/twilio";
@@ -20,6 +22,18 @@ import {
   isPrivateCandidateInternalAction,
   isPrivateCandidateInternalOnly,
 } from "../safety/privateCandidatePolicy";
+import {
+  formatGroundedResearchSummary,
+  runGroundedWebResearch,
+} from "../_core/webResearch";
+
+type ActionExecutionResult = {
+  success: boolean;
+  summary: string;
+  metadata?: Record<string, unknown>;
+};
+
+const EXECUTION_LEASE_TIMEOUT_MS = 30 * 60 * 1_000;
 
 /**
  * Task Executor — runs every 15 minutes.
@@ -38,12 +52,37 @@ import {
  * 11. Dual-agent verification (independent LLM-as-Judge)
  * 12. Unlock DAG dependents on success
  */
-export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: number; error?: string }> {
+export async function runTaskExecutor(
+  requestedTaskId?: number
+): Promise<{
+  executed: boolean;
+  taskId?: number;
+  succeeded?: boolean;
+  error?: string;
+}> {
   let currentTaskId: number | undefined;
+  let taskClaimed = false;
+  let taskClaimToken: string | undefined;
   try {
     // ── 1. Kill switch + API spend ────────────────────────────────────────────
     if (await isKillSwitchActive()) {
       return { executed: false, error: "Kill switch is active" };
+    }
+
+    const recoveredTaskIds = await requeueStaleInProgressTasks(
+      new Date(Date.now() - EXECUTION_LEASE_TIMEOUT_MS)
+    );
+    for (const recoveredTaskId of recoveredTaskIds) {
+      await logExecution({
+        taskId: recoveredTaskId,
+        actionType: "task_execution_stale_claim_recovered",
+        details: {
+          leaseTimeoutMinutes: EXECUTION_LEASE_TIMEOUT_MS / 60_000,
+        },
+        outcome: "partial",
+        errorMessage:
+          "Interrupted execution lease expired; task returned to pending",
+      });
     }
 
     const maxApiSpendCents = parseInt(await getConfig("max_api_spend_cents_per_day") || "5000");
@@ -53,9 +92,33 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     }
 
     // ── 2. DAG-aware task selection ───────────────────────────────────────────
-    const task = await getDagReadyTask();
+    const task = requestedTaskId
+      ? await getTaskById(requestedTaskId)
+      : await getDagReadyTask();
     if (!task) {
-      return { executed: false, error: "No DAG-ready pending tasks" };
+      return {
+        executed: false,
+        error: requestedTaskId
+          ? "Requested task was not found"
+          : "No DAG-ready pending tasks",
+      };
+    }
+    if (task.status !== "pending") {
+      return {
+        executed: false,
+        taskId: task.id,
+        error: `Requested task is ${task.status}, not pending`,
+      };
+    }
+    if (requestedTaskId) {
+      const readiness = await checkDagReadiness(task);
+      if (!readiness.isReady) {
+        return {
+          executed: false,
+          taskId: task.id,
+          error: `Requested task is blocked by dependencies: ${readiness.blockedBy.join(", ")}`,
+        };
+      }
     }
     currentTaskId = task.id;
 
@@ -321,9 +384,27 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
     }
 
     // ── 9. Real execution ─────────────────────────────────────────────────────
-    await updateTask(task.id, { status: "in_progress" });
+    const executionToken = randomUUID();
+    if (!(await claimPendingTask(task.id, executionToken))) {
+      await logExecution({
+        taskId: task.id,
+        actionType: "task_execution_claim_lost",
+        details: {
+          reason: "Task was no longer pending at the atomic execution claim",
+        },
+        outcome: "partial",
+        errorMessage: "Another execution already claimed this task",
+      });
+      return {
+        executed: false,
+        taskId: task.id,
+        error: "Task was already claimed by another execution",
+      };
+    }
+    taskClaimed = true;
+    taskClaimToken = executionToken;
     const startTime = Date.now();
-    let result: { success: boolean; summary: string };
+    let result: ActionExecutionResult;
 
     switch (task.actionType) {
       case "outbound_call":
@@ -366,28 +447,34 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
         metadata: task.metadata,
       });
 
-      // If verifier disagrees, downgrade to partial or failed
-      if (!verificationResult.verified && verificationResult.verdict === "fail") {
+      // Research must be positively verified; other legacy action types keep
+      // their existing fail-verdict behaviour.
+      if (
+        !verificationResult.verified &&
+        (
+          task.actionType === "web_research" ||
+          verificationResult.verdict === "fail"
+        )
+      ) {
         result.success = false;
-        result.summary = `Verification failed (score: ${(verificationResult.score * 100).toFixed(0)}%): ${verificationResult.reasoning}. Original: ${result.summary}`;
+        result.summary = `${task.actionType === "web_research" ? "Research verification did not pass" : "Verification failed"} (score: ${(verificationResult.score * 100).toFixed(0)}%): ${verificationResult.reasoning}. Original: ${result.summary}`;
       }
     }
 
-    // Track API spend
-    const estimatedSpendCents = 2; // ~2 LLM calls per task (premortem + execution)
-    const todayDate = new Date().toISOString().split("T")[0];
-    const currentMetrics = await getTodayMetrics();
-    const currentSpend = currentMetrics?.apiSpendCents || 0;
-    await upsertDailyMetrics(todayDate, { apiSpendCents: currentSpend + estimatedSpendCents });
-
-    // Update task with all metadata
+    // Finalise only if this execution still owns the current fencing token.
+    // A recovery/retry invalidates the old token, so a stale worker cannot
+    // overwrite the newer execution's result.
     const finalMeta = (task.metadata as Record<string, unknown>) || {};
-    await updateTask(task.id, {
+    const finalised = await updateClaimedTask(task.id, executionToken, {
       status: result.success ? "completed" : "failed",
       resultSummary: result.summary,
       completedAt: new Date(),
       metadata: {
         ...finalMeta,
+        premortem_confidence: premortem.confidenceScore,
+        premortem_failure_modes: premortem.failureModes,
+        premortem_ran_at: new Date().toISOString(),
+        ...(result.metadata || {}),
         verification_result: verificationResult ? {
           verified: verificationResult.verified,
           score: verificationResult.score,
@@ -400,6 +487,60 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
         output_schema_warnings: outputValidation.warnings,
         execution_duration_ms: durationMs,
       },
+    });
+    if (!finalised) {
+      await logExecution({
+        taskId: task.id,
+        actionType: "task_execution_stale_result_discarded",
+        details: {
+          reason:
+            "Execution fencing token no longer matched the current task claim",
+        },
+        outcome: "partial",
+        errorMessage:
+          "Stale execution result was discarded after lease recovery",
+      });
+      return {
+        executed: false,
+        taskId: task.id,
+        error: "Execution claim expired; stale result discarded",
+      };
+    }
+    taskClaimed = false;
+
+    // Persist A/B outcomes only after schema validation, independent
+    // verification, and fenced task finalisation. The task-derived key makes
+    // retries update one record rather than creating duplicates.
+    if (task.actionType === "web_research") {
+      const experiment = result.metadata?.research_experiment as
+        | { experiment_id?: unknown; variant_id?: unknown }
+        | undefined;
+      if (
+        typeof experiment?.experiment_id === "string" &&
+        typeof experiment.variant_id === "string"
+      ) {
+        await recordVariantOutcome({
+          experimentId: experiment.experiment_id,
+          variantId: experiment.variant_id,
+          taskId: task.id,
+          success: result.success,
+          confidenceScore: verificationResult?.score || 0,
+          metadata: {
+            output_schema_valid: outputValidation.valid,
+            verification_verified: verificationResult?.verified === true,
+          },
+        }).catch(() => {});
+      }
+    }
+
+    // Grounded research includes a hosted web-search tool call. Keep the
+    // accounting deliberately conservative so the daily cap fails closed.
+    const estimatedSpendCents = task.actionType === "web_research" ? 10 : 2;
+    const todayDate = new Date().toISOString().split("T")[0];
+    const currentMetrics = await getTodayMetrics();
+    const currentSpend = currentMetrics?.apiSpendCents || 0;
+    await upsertDailyMetrics(todayDate, {
+      apiSpendCents: currentSpend + estimatedSpendCents,
     });
 
     // Log execution
@@ -438,18 +579,37 @@ export async function runTaskExecutor(): Promise<{ executed: boolean; taskId?: n
       executionTimeMs: durationMs,
     }).catch((e: any) => console.warn("[Mem0] storeTaskOutcome failed:", e.message));
 
-    return { executed: true, taskId: task.id };
+    return {
+      executed: true,
+      taskId: task.id,
+      succeeded: result.success,
+      ...(result.success ? {} : { error: result.summary }),
+    };
   } catch (error: any) {
     const isUsageExhausted = error.message?.includes("LLM_USAGE_EXHAUSTED") || error.message?.includes("usage exhausted");
     if (isUsageExhausted) {
       console.warn("[TaskExecutor] Skipping task — Manus Forge LLM quota exhausted. Will retry next cycle.");
       // Reset task to pending so it retries next cycle
       if (currentTaskId) {
-        await updateTask(currentTaskId, { status: "pending" }).catch(() => {});
+        if (taskClaimed && taskClaimToken) {
+          await updateClaimedTask(currentTaskId, taskClaimToken, {
+            status: "pending",
+          }).catch(() => false);
+        } else {
+          await updateTask(currentTaskId, { status: "pending" }).catch(() => {});
+        }
       }
       return { executed: false, error: "LLM quota exhausted — task reset to pending" };
     }
+    if (taskClaimed && currentTaskId && taskClaimToken) {
+      await updateClaimedTask(currentTaskId, taskClaimToken, {
+        status: "failed",
+        resultSummary: `Task execution failed safely: ${error.message}`,
+        completedAt: new Date(),
+      }).catch(() => false);
+    }
     await logExecution({
+      taskId: currentTaskId,
       actionType: "task_execution",
       details: { error: error.message },
       outcome: "failure",
@@ -655,49 +815,40 @@ async function executeSMS(task: any): Promise<{ success: boolean; summary: strin
   }
 }
 
-async function executeResearch(task: any): Promise<{ success: boolean; summary: string }> {
+async function executeResearch(task: any): Promise<ActionExecutionResult> {
   try {
-    // Inject relevant memories from previous cycles
-    const memoryContext = await getTaskContext({
-      taskDescription: task.description,
-      actionType: "web_research",
-      entityId: (task.metadata as any)?.entityId,
-    }).catch(() => "");
-    const response = await invokeLLM({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: `You are a business research assistant for Robur Resources (resource recovery company in Perth, WA). Provide actionable research findings based on the task. Include specific names, contacts, and data points where possible. If you cannot find real data, clearly state what would need to be verified and how.${memoryContext}` },
-        { role: "user", content: `Research task: ${task.description}\n\nProvide findings and actionable next steps. If you identify a specific business opportunity (new supplier, buyer, contract, or revenue stream), include a line starting with "OPPORTUNITY:" followed by a brief description and estimated value.` }
-      ]
-    });
-    const rawFindings = response.choices[0]?.message?.content;
-    const findings = typeof rawFindings === 'string' ? rawFindings : "No findings";
+    // Web search receives only the owner-authored research task. Private Mem0
+    // context must never be exported into a tool-enabled external request.
+    const grounded = await runGroundedWebResearch(task.description);
+    const findings = grounded.text;
 
-    // Extract and log opportunities from research findings
-    const opportunityMatch = findings.match(/OPPORTUNITY:\s*(.+?)(?:\n|$)/i);
-    if (opportunityMatch) {
-      const { createOpportunity } = await import("../db");
-      await createOpportunity({
-        source: `task_${task.id}`,
-        description: opportunityMatch[1].trim(),
-        priority: "medium",
-        estimatedValue: String(task.estimatedValue || "0"),
-      }).catch(() => {});
-    }
-
-    // Track A/B variant outcome for research approach test
+    // Assign a deterministic A/B variant now, but persist its outcome only
+    // after schema validation and independent verification in the caller.
     const researchExperiment = await getActiveExperiment("web_research").catch(() => null);
+    let researchExperimentMetadata: Record<string, string> | undefined;
     if (researchExperiment) {
       const researchVariant = assignVariant(researchExperiment, task.id);
-      await recordVariantOutcome({
-        experimentId: researchExperiment.id,
-        variantId: researchVariant.id,
-        taskId: task.id,
-        success: findings !== "No findings" && findings.length > 100,
-        confidenceScore: 0.75,
-      }).catch(() => {});
+      researchExperimentMetadata = {
+        experiment_id: researchExperiment.id,
+        variant_id: researchVariant.id,
+      };
     }
-    return { success: true, summary: `findings: ${findings.substring(0, 500)}` };
+    return {
+      success: true,
+      summary: formatGroundedResearchSummary(grounded),
+      metadata: {
+        grounded_research: {
+          model: grounded.model,
+          response_id: grounded.responseId,
+          web_search_call_count: grounded.webSearchCallCount,
+          sources: grounded.sources,
+          completed_at: new Date().toISOString(),
+        },
+        ...(researchExperimentMetadata
+          ? { research_experiment: researchExperimentMetadata }
+          : {}),
+      },
+    };
   } catch (error: any) {
     return { success: false, summary: `Research failed: ${error.message}` };
   }

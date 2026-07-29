@@ -358,13 +358,9 @@ export async function getActiveExperiment(
 /**
  * Record an outcome for an experiment variant.
  */
-export async function recordVariantOutcome(params: {
-  experimentId: string;
-  variantId: string;
-  taskId: number;
-  success: boolean;
-  confidenceScore: number;
-}): Promise<void> {
+export async function recordVariantOutcome(
+  params: VariantOutcome
+): Promise<void> {
   await saveVariantOutcome(params);
 
   // Check if we have a winner after this new data point

@@ -14,6 +14,7 @@
     "verify:private": "tsx scripts/verify-private-candidate.ts",
     "activate:private": "tsx scripts/activate-private-candidate.ts",
     "certify:private-owner": "tsx scripts/certify-private-owner.ts",
+    "certify:private-research": "tsx scripts/certify-grounded-web-research.ts",
     "audit:private-outcomes": "tsx scripts/audit-private-outcomes.ts",
     "certify:private-cycle": "tsx scripts/certify-private-cycle.ts",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"

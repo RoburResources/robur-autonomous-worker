@@ -20,6 +20,7 @@ import {
   getRecentMetrics, getTodayMetrics,
   getDailyCallCount, getDailyEmailCount,
 } from "./db";
+import { runTaskExecutor } from "./autonomous/taskExecutor";
 
 export const appRouter = router({
   system: systemRouter,
@@ -103,7 +104,7 @@ export const appRouter = router({
       }),
     create: ownerProcedure
       .input(z.object({
-        description: z.string().trim().min(1).max(4_000),
+        description: z.string().trim().min(10).max(4_000),
         actionType: z
           .string()
           .regex(/^[a-z][a-z0-9_]{0,63}$/)
@@ -112,7 +113,7 @@ export const appRouter = router({
         goalId: z.number().int().positive().optional(),
       }))
       .mutation(async ({ input }) => {
-        await createTask({
+        const result = await createTask({
           description: input.description,
           actionType: input.actionType,
           priorityScore: input.priorityScore,
@@ -120,7 +121,21 @@ export const appRouter = router({
           source: "manual",
           status: "pending",
         });
-        return { success: true };
+        const taskId = Number(
+          (result as any)?.[0]?.insertId ?? (result as any)?.insertId
+        );
+        if (!Number.isInteger(taskId) || taskId <= 0) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Task was not assigned a valid ID",
+          });
+        }
+        return { success: true, taskId };
+      }),
+    run: ownerProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        return runTaskExecutor(input.id);
       }),
   }),
 

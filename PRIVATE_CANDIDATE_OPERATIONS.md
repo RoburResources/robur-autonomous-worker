@@ -41,8 +41,13 @@ research/data-entry execution, evaluation, and self-improvement only. Any task
 whose action type could call, SMS, email, or otherwise communicate externally
 is moved to `awaiting_approval` without sending a notification.
 
-Use an SSH tunnel for private access. Do not create a public Railway domain to
-run a health or browser test.
+Use the existing canonical Railway service URL with the owner-only session:
+
+- `https://robur-autonomous-worker-private-candidate.up.railway.app`
+
+Do not provision another domain. Anonymous and non-owner reads and writes must
+remain rejected. The short-lived owner bootstrap may establish the normal
+owner session, but its one-time token must never be logged or persisted.
 
 ## Verification
 
@@ -52,8 +57,8 @@ Run the committed build verification:
 npx.cmd --yes pnpm@10.4.1 verify
 ```
 
-For the deployed candidate, open a localhost SSH tunnel and supply a short-lived
-owner session only in the process environment:
+For command-line verification, open a localhost SSH tunnel and supply a
+short-lived owner session only in the process environment:
 
 ```powershell
 $env:PRIVATE_CANDIDATE_URL='http://127.0.0.1:18080'
@@ -67,6 +72,10 @@ Remove-Item Env:EXPECT_INTERNAL_AUTONOMY
 The verifier is deliberately restricted to localhost. It performs read-only
 owner checks plus rejected unauthenticated probes. It never changes the worker
 state or creates a task.
+
+The execution adapter remains WSL2-only. The Windows-native route is rejected
+and must not be represented as certified. The authoritative adapter evidence is
+in `../private/codex-adapter/CERTIFICATION.md`.
 
 ## Security controls
 
@@ -100,22 +109,22 @@ If containment changes unexpectedly:
 4. Confirm no new external-effect task, execution, call, SMS, or email row.
 5. Preserve the deployment ID and logs before further changes.
 
-## Backup and disaster recovery gate
+## Backup and disaster recovery
 
 The MySQL volume is persistent, but persistence is not an independent backup.
-Before any production release:
+The isolated logical backup/restore drill passed on 30 July 2026:
 
-1. Create a provider-native snapshot or encrypted logical backup outside the
-   live MySQL volume.
-2. Record its immutable identifier, creation time, source environment, and
-   retention.
-3. Restore it into a separate isolated MySQL service.
-4. Compare table counts and critical configuration values.
-5. Destroy only the temporary restore target after proof is retained.
+- evidence: `../MYSQL_BACKUP_RESTORE_DRILL_2026-07-30.md`
+- evidence SHA-256:
+  `7f25e287f24671557919be31ae078525c54a0ae62098c1ed724e6cc214e2643f`
+- schema hashes matched
+- all nine table counts and checksums matched
+- the app remained connected to the source database
+- production remained empty
+- the temporary restore environment was removed after proof
 
-No independent backup or restore drill is currently certified. This is a
-release gate, not permission to copy private data into an unapproved external
-system.
+Repeat the drill before production if the schema, database engine, backup
+method, or release data materially changes.
 
 ## Rollback
 

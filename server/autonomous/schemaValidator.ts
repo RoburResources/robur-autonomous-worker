@@ -91,6 +91,23 @@ export function validateTaskOutput(
     }
   }
 
+  if (actionType === "web_research") {
+    const sourceSection = resultSummary.match(/(?:^|\n)Sources:\s*\n([\s\S]*)$/i);
+    const urls = new Set(
+      Array.from(
+        (sourceSection?.[1] || "").matchAll(/https?:\/\/[^\s<>"')\]]+/g),
+        match => match[0].replace(/[.,;:]+$/, "")
+      )
+    );
+    if (!sourceSection) {
+      errors.push("Web research output is missing a visible Sources section");
+    } else if (urls.size < 2) {
+      errors.push(
+        `Web research output cites ${urls.size} distinct source(s); at least 2 are required`
+      );
+    }
+  }
+
   // Check for error indicators in the summary
   const errorIndicators = [
     "failed:", "error:", "exception:", "could not", "unable to",

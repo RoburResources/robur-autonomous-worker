@@ -44,6 +44,11 @@ describe("private candidate scheduler", () => {
       allowed: true,
     });
     schedulerMocks.claimPrivateCandidateJobSlot.mockResolvedValue(true);
+    schedulerMocks.logExecution.mockResolvedValue(undefined);
+    schedulerMocks.runTaskExecutor.mockResolvedValue({
+      executed: false,
+      error: "No DAG-ready pending tasks",
+    });
   });
 
   afterEach(() => {
@@ -81,7 +86,87 @@ describe("private candidate scheduler", () => {
       "2026-07-27T12:30"
     );
     expect(schedulerMocks.runTaskExecutor).toHaveBeenCalledOnce();
-    expect(schedulerMocks.logExecution).toHaveBeenCalledOnce();
+    expect(schedulerMocks.logExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "success",
+        details: expect.objectContaining({
+          executed: false,
+          idle: true,
+        }),
+      })
+    );
+  });
+
+  it("records a blocked executor cycle as partial instead of success", async () => {
+    schedulerMocks.runTaskExecutor.mockResolvedValue({
+      executed: false,
+      taskId: 42,
+      error: "Confidence gate: evidence insufficient",
+    });
+
+    await runPrivateCandidateSchedulerTick(
+      new Date("2026-07-27T12:15:00.000Z")
+    );
+
+    expect(schedulerMocks.logExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "partial",
+        errorMessage: "Confidence gate: evidence insufficient",
+        details: expect.objectContaining({
+          executed: false,
+          taskId: 42,
+          idle: false,
+        }),
+      })
+    );
+  });
+
+  it("records an executed task failure as partial instead of success", async () => {
+    schedulerMocks.runTaskExecutor.mockResolvedValue({
+      executed: true,
+      taskId: 43,
+      succeeded: false,
+      error: "Research verification did not pass",
+    });
+
+    await runPrivateCandidateSchedulerTick(
+      new Date("2026-07-27T12:00:00.000Z")
+    );
+
+    expect(schedulerMocks.logExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: "private_candidate_task_executor_cycle",
+        outcome: "partial",
+        errorMessage: "Research verification did not pass",
+        details: expect.objectContaining({
+          executed: true,
+          succeeded: false,
+          taskId: 43,
+        }),
+      })
+    );
+  });
+
+  it("durably records a thrown executor job as failure", async () => {
+    schedulerMocks.runTaskExecutor.mockRejectedValue(
+      new Error("database connection lost")
+    );
+
+    await runPrivateCandidateSchedulerTick(
+      new Date("2026-07-28T12:15:00.000Z")
+    );
+
+    expect(schedulerMocks.logExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: "private_candidate_task_executor_cycle",
+        outcome: "failure",
+        errorMessage: "database connection lost",
+        details: expect.objectContaining({
+          slot: "2026-07-28T12:15",
+          containment: "internal-only",
+        }),
+      })
+    );
   });
 
   it("skips a slot already claimed by another live instance", async () => {

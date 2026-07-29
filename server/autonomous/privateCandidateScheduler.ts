@@ -38,19 +38,47 @@ function slotFor(job: PrivateCandidateJob, now: Date): string {
 }
 
 async function runJob(job: PrivateCandidateJob): Promise<void> {
+  let executorResult:
+    | {
+        executed: boolean;
+        taskId?: number;
+        succeeded?: boolean;
+        error?: string;
+      }
+    | undefined;
   if (job === "task-generator") await runTaskGenerator();
-  else if (job === "task-executor") await runTaskExecutor();
+  else if (job === "task-executor") executorResult = await runTaskExecutor();
   else if (job === "evaluator") await runEvaluator();
   else await runSelfImprover();
 
+  const executorIdle =
+    executorResult?.executed === false &&
+    executorResult.error === "No DAG-ready pending tasks";
+  const executorBlocked =
+    executorResult?.executed === false &&
+    !executorIdle;
+  const executorFailed =
+    executorResult?.executed === true &&
+    executorResult.succeeded === false;
   await logExecution({
     actionType: `private_candidate_${job.replace("-", "_")}_cycle`,
     details: {
       job,
       containment: "internal-only",
+      ...(executorResult
+        ? {
+            executed: executorResult.executed,
+            succeeded: executorResult.succeeded,
+            taskId: executorResult.taskId,
+            error: executorResult.error,
+            idle: executorIdle,
+          }
+        : {}),
       completedAt: new Date().toISOString(),
     },
-    outcome: "success",
+    outcome: executorBlocked || executorFailed ? "partial" : "success",
+    errorMessage:
+      executorBlocked || executorFailed ? executorResult?.error : undefined,
   });
 }
 
@@ -78,6 +106,24 @@ export async function runPrivateCandidateSchedulerTick(
         await runJob(job);
         console.log(`[Private Candidate] Completed internal ${job} cycle`);
       } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown scheduler failure";
+        await logExecution({
+          actionType: `private_candidate_${job.replace("-", "_")}_cycle`,
+          details: {
+            job,
+            slot,
+            containment: "internal-only",
+            completedAt: new Date().toISOString(),
+          },
+          outcome: "failure",
+          errorMessage: message,
+        }).catch(logError => {
+          console.error(
+            `[Private Candidate] Could not persist ${job} failure`,
+            logError
+          );
+        });
         console.error(`[Private Candidate] Internal ${job} cycle failed`, error);
       }
     }

@@ -54,9 +54,39 @@ describe("schemaValidator — validateTaskOutput", () => {
   it("passes a valid web_research output", () => {
     const result = validateTaskOutput(
       "web_research",
-      "findings: Perth has over 450 auto shops across the metro area. Top concentrations in Malaga, Osborne Park, and Welshpool. Key contacts identified: ABC Auto Parts (08 9444 1234), XYZ Wreckers (08 9321 5678). Recommended approach: direct phone outreach to the top 20 by size."
+      [
+        "findings: The cited official pages identify current Western Australian planning and waste-management requirements. Any commercial opportunity still requires separate evidence and owner review.",
+        "",
+        "Sources:",
+        "1. WA Government planning guidance - https://www.wa.gov.au/topic/planning",
+        "2. DWER waste guidance - https://www.wa.gov.au/service/environment/waste-management",
+      ].join("\n")
     );
     expect(result.valid).toBe(true);
+  });
+
+  it("fails web_research output without retained source evidence", () => {
+    const result = validateTaskOutput(
+      "web_research",
+      "findings: This apparently detailed research output makes material claims but retains no evidence that an owner can inspect."
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.includes("Sources section"))).toBe(true);
+  });
+
+  it("fails web_research output with fewer than two distinct sources", () => {
+    const result = validateTaskOutput(
+      "web_research",
+      [
+        "findings: This output is long enough to pass the content-length gate, but its evidence remains insufficient for trusted use.",
+        "",
+        "Sources:",
+        "1. WA Government - https://www.wa.gov.au/topic/planning",
+        "2. Duplicate WA Government URL - https://www.wa.gov.au/topic/planning",
+      ].join("\n")
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.includes("1 distinct source"))).toBe(true);
   });
 
   it("fails an empty output", () => {
