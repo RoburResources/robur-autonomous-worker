@@ -43,6 +43,7 @@ vi.mock("../safety/privateCandidatePolicy", () => ({
 import {
   runTaskGenerator,
   taskDescriptionsOverlap,
+  withPrivateResearchEvidenceContract,
 } from "./taskGenerator";
 
 describe("task generator metadata persistence", () => {
@@ -108,6 +109,12 @@ describe("task generator metadata persistence", () => {
     const insertedTask = mocks.createTask.mock.calls[0][0];
 
     expect(insertedTask.actionType).toBe("web_research");
+    expect(insertedTask.description).toContain(
+      "Use only current publicly accessible sources."
+    );
+    expect(insertedTask.description).toContain(
+      "a complete evidence-availability conclusion"
+    );
     expect(typeof insertedTask.metadata).toBe("object");
     expect(insertedTask.metadata).toEqual({
       roiScore: 8,
@@ -119,10 +126,39 @@ describe("task generator metadata persistence", () => {
       generated_at: expect.any(String),
       generation_novelty_key:
         "australian guidance market official recovery research western",
+      research_completion_contract_version: 1,
+      public_evidence_only: true,
+      evidence_gap_is_valid_completion: true,
     });
     expect(
       Object.keys(insertedTask.metadata).some(key => /^\d+$/.test(key))
     ).toBe(false);
+
+    const systemPrompt = mocks.invokeLLM.mock.calls[0][0].messages[0].content;
+    expect(systemPrompt).toContain(
+      "answerable now from current publicly accessible sources"
+    );
+    expect(systemPrompt).toContain(
+      "Do not make private, proprietary, undisclosed, contact-required, or future data a required deliverable"
+    );
+  });
+
+  it("does not alter non-private task descriptions or metadata", async () => {
+    mocks.isPrivateCandidateInternalOnly.mockReturnValue(false);
+
+    await expect(runTaskGenerator()).resolves.toEqual({ tasksCreated: 1 });
+
+    const insertedTask = mocks.createTask.mock.calls[0][0];
+    expect(insertedTask.description).toBe(
+      "Research official Western Australian recovery-market guidance."
+    );
+    expect(insertedTask.metadata).not.toHaveProperty(
+      "research_completion_contract_version"
+    );
+    expect(insertedTask.metadata).not.toHaveProperty("public_evidence_only");
+    expect(insertedTask.metadata).not.toHaveProperty(
+      "evidence_gap_is_valid_completion"
+    );
   });
 
   it("skips generation before calling the model when the private queue is full", async () => {
@@ -163,6 +199,15 @@ describe("task generator metadata persistence", () => {
 });
 
 describe("task generation duplicate detection", () => {
+  it("adds the private research evidence contract exactly once", () => {
+    const description = "Assess public evidence for Perth hardstand demand.";
+    const once = withPrivateResearchEvidenceContract(description);
+
+    expect(once).toContain(description);
+    expect(withPrivateResearchEvidenceContract(once)).toBe(once);
+    expect(taskDescriptionsOverlap(description, once)).toBe(true);
+  });
+
   it("detects reordered near-identical task descriptions", () => {
     expect(
       taskDescriptionsOverlap(

@@ -11,8 +11,38 @@ const TASK_DESCRIPTION_STOP_WORDS = new Set([
   "using", "with",
 ]);
 
+const PRIVATE_RESEARCH_EVIDENCE_CONTRACT =
+  "Use only current publicly accessible sources. A well-supported finding " +
+  "that requested information is not publicly disclosed is a complete " +
+  "evidence-availability conclusion; do not invent values or require private " +
+  "records, external contact, or future access.";
+const PRIVATE_RESEARCH_EVIDENCE_SUFFIX =
+  `\n\nCompletion contract: ${PRIVATE_RESEARCH_EVIDENCE_CONTRACT}`;
+
+function withoutPrivateResearchEvidenceContract(
+  description: string
+): string {
+  const trimmed = description.trim();
+  return trimmed.endsWith(PRIVATE_RESEARCH_EVIDENCE_SUFFIX)
+    ? trimmed.slice(0, -PRIVATE_RESEARCH_EVIDENCE_SUFFIX.length).trim()
+    : trimmed;
+}
+
+export function withPrivateResearchEvidenceContract(
+  description: string
+): string {
+  const trimmed = description.trim();
+  if (
+    !trimmed ||
+    trimmed.includes(PRIVATE_RESEARCH_EVIDENCE_CONTRACT)
+  ) {
+    return trimmed;
+  }
+  return `${trimmed}${PRIVATE_RESEARCH_EVIDENCE_SUFFIX}`;
+}
+
 function taskDescriptionTokens(description: string): string[] {
-  return description
+  return withoutPrivateResearchEvidenceContract(description)
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[^a-z0-9]+/g, " ")
@@ -164,6 +194,9 @@ ${privateCandidate ? `
 PRIVATE CANDIDATE MODE:
 - Generate only web_research tasks.
 - Each task must be a contained research or analysis objective; do not claim it updates a workflow, record, document, or external system.
+- Each task must be answerable now from current publicly accessible sources.
+- Do not make private, proprietary, undisclosed, contact-required, or future data a required deliverable.
+- When a useful scope may reveal an evidence gap, ask for an assessment of the available public evidence and a source-backed statement of what is unavailable, rather than requiring an unavailable metric.
 - Do not generate data_entry, contact, payment, provider, or publication work.` : ""}
 
 Respond in JSON format with an array of task objects.`
@@ -268,13 +301,23 @@ Respond in JSON format with an array of task objects.`
         generation_novelty_key: Array.from(
           new Set(taskDescriptionTokens(task.description))
         ).sort().join(" "),
+        ...(privateCandidate
+          ? {
+              research_completion_contract_version: 1,
+              public_evidence_only: true,
+              evidence_gap_is_valid_completion: true,
+            }
+          : {}),
       };
+      const persistedDescription = privateCandidate
+        ? withPrivateResearchEvidenceContract(task.description)
+        : task.description;
       // dag_dependencies stores numeric task IDs for DAG-aware execution
       // dependencies stores string labels for human readability
       const insertResult = await createTask({
         goalId: task.goalId,
         source: "task_generator",
-        description: task.description,
+        description: persistedDescription,
         priorityScore: Math.min(100, Math.max(1, task.priorityScore)),
         status: "pending",
         assignedAgent: "autonomous_worker",
