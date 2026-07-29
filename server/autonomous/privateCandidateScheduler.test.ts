@@ -166,6 +166,7 @@ describe("private candidate scheduler", () => {
         outcome: "success",
         errorMessage: undefined,
         details: expect.objectContaining({
+          slot: "2026-07-29T12",
           tasksCreated: 0,
           idle: true,
           error:

@@ -47,7 +47,7 @@ function slotFor(job: PrivateCandidateJob, now: Date): string {
   return isoMinute.slice(0, 10);
 }
 
-async function runJob(job: PrivateCandidateJob): Promise<void> {
+async function runJob(job: PrivateCandidateJob, slot: string): Promise<void> {
   let generatorResult:
     | {
         tasksCreated: number;
@@ -92,6 +92,7 @@ async function runJob(job: PrivateCandidateJob): Promise<void> {
     actionType: `private_candidate_${job.replace("-", "_")}_cycle`,
     details: {
       job,
+      slot,
       containment: "internal-only",
       ...(executorResult
         ? {
@@ -137,7 +138,7 @@ export async function runPrivateCandidateSchedulerTick(
         continue;
       }
       try {
-        await runJob(job);
+        await runJob(job, slot);
         console.log(`[Private Candidate] Completed internal ${job} cycle`);
       } catch (error) {
         const message = boundedSchedulerError(
