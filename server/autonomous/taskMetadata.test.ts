@@ -27,6 +27,36 @@ describe("task metadata normalization", () => {
     });
   });
 
+  it("repairs metadata already polluted by spreading a stored JSON string", () => {
+    const encoded = JSON.stringify({
+      roiScore: 6,
+      requiresExternalContact: false,
+      dag_dependencies: [],
+    });
+    const polluted = {
+      ...Object.fromEntries(
+        Array.from(encoded, (character, index) => [String(index), character])
+      ),
+      output_schema_valid: false,
+    };
+
+    const normalized = normalizeTaskMetadata(polluted);
+
+    expect(normalized).toEqual({
+      roiScore: 6,
+      requiresExternalContact: false,
+      dag_dependencies: [],
+      output_schema_valid: false,
+    });
+    expect(Object.keys(normalized).some(key => /^\d+$/.test(key))).toBe(false);
+  });
+
+  it("preserves numeric fields that are not a recoverable spread JSON object", () => {
+    const source = { "0": "x", "2": "z", category: "legacy" };
+
+    expect(normalizeTaskMetadata(source)).toEqual(source);
+  });
+
   it.each([
     null,
     undefined,
