@@ -100,6 +100,10 @@ export function registerOwnerAccessRoutes(app: Express) {
     }
   );
 
+  app.all("/api/private-owner/access", (_req: Request, res: Response) => {
+    res.status(404).json({ error: "Not found" });
+  });
+
   app.all("/api/oauth/callback", (_req: Request, res: Response) => {
     res.status(404).json({ error: "Not found" });
   });
