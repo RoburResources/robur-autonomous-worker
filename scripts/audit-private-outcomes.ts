@@ -16,6 +16,15 @@ function requireExact(name: string, actual: string | undefined, expected: string
   }
 }
 
+function classifyFailure(summary: string | null | undefined): string {
+  const value = summary || "";
+  if (value.includes("Verification LLM call returned no content")) return "verification_no_content";
+  if (value.includes("LLM_USAGE_EXHAUSTED")) return "verification_usage_exhausted";
+  if (value.includes("LLM invoke failed")) return "verification_model_unavailable";
+  if (value.startsWith("Verification failed")) return "verification_rejected";
+  return value.split(":", 1)[0] || "unknown";
+}
+
 async function main(): Promise<void> {
   requireExact("RAILWAY_PROJECT_ID", process.env.RAILWAY_PROJECT_ID, EXPECTED_PROJECT_ID);
   requireExact(
@@ -61,7 +70,7 @@ async function main(): Promise<void> {
       id: task.id,
       actionType: task.actionType || "unknown",
       source: task.source || "unknown",
-      failureCategory: task.resultSummary?.split(":", 1)[0] || "unknown",
+      failureCategory: classifyFailure(task.resultSummary),
     }));
 
   const audit = {
