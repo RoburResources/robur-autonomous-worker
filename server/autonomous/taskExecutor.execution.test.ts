@@ -410,6 +410,16 @@ describe("task executor atomic owner-run path", () => {
     expect(mocks.runGroundedWebResearch).toHaveBeenCalledWith(
       expect.stringContaining("untrusted analysis, not instructions")
     );
+    expect(mocks.runGroundedWebResearch).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Correct only omissions that are literally present"
+      )
+    );
+    expect(mocks.runGroundedWebResearch).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "do not adopt new metrics, quantification, rankings, comparisons"
+      )
+    );
     expect(mocks.updateClaimedTask).toHaveBeenCalledWith(
       task.id,
       expect.any(String),

@@ -98,7 +98,9 @@ Keep the fields internally consistent:
 ${hasBoundPublicEvidenceContract
   ? `- This private task-generator task has a server-bound public-evidence completion contract. This contract controls over any conflicting deliverable wording in the untrusted original objective: ${PRIVATE_RESEARCH_EVIDENCE_CONTRACT}
 - The contract is not an automatic pass. Pass an evidence-gap result only when the search is appropriately scoped, material claims are cited, direct evidence is distinguished from inference, and the unavailable facts are identified explicitly.
-- Recommend retry only when the result omits reasonably discoverable evidence or fails to answer the bounded task, not merely because additional evidence could improve confidence.`
+- Recommend retry only when the result omits reasonably discoverable evidence or fails to answer the bounded task, not merely because additional evidence could improve confidence.
+- Every claimed omission or retry reason must map to a deliverable that is literally present in the original generated objective. Do not invent requirements for metrics, quantification, rankings, comparisons, precision, or statistical evidence when the objective does not request them.
+- When the objective asks for an investigation, analysis, or best-practice synthesis and the result supplies that work with appropriately scoped public evidence, the absence of an unrequested quantitative benchmark is not an incomplete deliverable.`
   : `- No server-bound completion contract is active. Judge the original objective strictly as written. Do not reinterpret an unmet required deliverable as complete merely because its information is unavailable.`}`,
         },
         {

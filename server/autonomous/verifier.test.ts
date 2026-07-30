@@ -111,6 +111,15 @@ describe("task verifier", () => {
     expect(request.messages[1].content).toContain(
       "Server-bound completion contract status: ACTIVE"
     );
+    expect(request.messages[0].content).toContain(
+      "Every claimed omission or retry reason must map to a deliverable that is literally present"
+    );
+    expect(request.messages[0].content).toContain(
+      "Do not invent requirements for metrics, quantification, rankings, comparisons, precision"
+    );
+    expect(request.messages[0].content).toContain(
+      "the absence of an unrequested quantitative benchmark is not an incomplete deliverable"
+    );
 
     await verifyTaskOutcome({
       id: 3,
@@ -130,6 +139,9 @@ describe("task verifier", () => {
     );
     expect(unboundRequest.messages[0].content).toContain(
       "No server-bound completion contract is active"
+    );
+    expect(unboundRequest.messages[0].content).not.toContain(
+      "Every claimed omission or retry reason must map to a deliverable that is literally present"
     );
     expect(unboundRequest.messages[1].content).toContain(
       "Server-bound completion contract status: INACTIVE"

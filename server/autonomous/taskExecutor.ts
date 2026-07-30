@@ -101,7 +101,9 @@ ${feedback}
 [END VERIFIER FEEDBACK]
 Directly correct the supported omissions. If requested information is not publicly
 disclosed, prove that limitation with the best available primary sources and state
-exactly what remains unavailable.`;
+exactly what remains unavailable. Correct only omissions that are literally present
+in the original task; do not adopt new metrics, quantification, rankings, comparisons,
+precision, or other deliverables introduced only by the verifier feedback.`;
 }
 
 /**
