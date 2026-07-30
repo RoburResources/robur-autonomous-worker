@@ -510,6 +510,7 @@ export async function runTaskExecutor(
     if (result.success) {
       verificationResult = await verifyTaskOutcome({
         id: task.id,
+        source: task.source,
         description: task.description,
         actionType: task.actionType,
         resultSummary: result.summary,

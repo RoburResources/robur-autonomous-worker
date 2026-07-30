@@ -58,6 +58,7 @@ export async function runEvaluator(): Promise<{ evaluated: number; error?: strin
         // Run verification now if it wasn't done during execution
         const vr = await verifyTaskOutcome({
           id: task.id,
+          source: task.source,
           description: task.description,
           actionType: task.actionType,
           resultSummary: task.resultSummary,

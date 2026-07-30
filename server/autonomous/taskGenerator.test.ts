@@ -45,6 +45,7 @@ import {
   taskDescriptionsOverlap,
   withPrivateResearchEvidenceContract,
 } from "./taskGenerator";
+import { PRIVATE_RESEARCH_EVIDENCE_CONTRACT } from "./researchCompletionContract";
 
 describe("task generator metadata persistence", () => {
   beforeEach(() => {
@@ -112,6 +113,9 @@ describe("task generator metadata persistence", () => {
     expect(insertedTask.description).toContain(
       "Use only current publicly accessible sources."
     );
+    expect(insertedTask.description).toMatch(
+      /^Public-evidence research objective\.\nCompletion contract: /
+    );
     expect(insertedTask.description).toContain(
       "a complete evidence-availability conclusion"
     );
@@ -126,7 +130,7 @@ describe("task generator metadata persistence", () => {
       generated_at: expect.any(String),
       generation_novelty_key:
         "australian guidance market official recovery research western",
-      research_completion_contract_version: 1,
+      research_completion_contract_version: 2,
       public_evidence_only: true,
       evidence_gap_is_valid_completion: true,
     });
@@ -200,12 +204,55 @@ describe("task generator metadata persistence", () => {
 
 describe("task generation duplicate detection", () => {
   it("adds the private research evidence contract exactly once", () => {
-    const description = "Assess public evidence for Perth hardstand demand.";
+    const description = "Research Perth hardstand demand.";
     const once = withPrivateResearchEvidenceContract(description);
 
     expect(once).toContain(description);
     expect(withPrivateResearchEvidenceContract(once)).toBe(once);
     expect(taskDescriptionsOverlap(description, once)).toBe(true);
+
+    const legacyV1 = `${description}
+
+Completion contract: Use only current publicly accessible sources. A well-supported finding that requested information is not publicly disclosed is a complete evidence-availability conclusion; do not invent values or require private records, external contact, or future access.`;
+    expect(taskDescriptionsOverlap(description, legacyV1)).toBe(true);
+  });
+
+  it("does not let quoted or nested contract boilerplate suppress distinct tasks", () => {
+    const candidate =
+      `Assess Perth commercial hardstand annual lease rates and utility costs. ` +
+      `Quoted policy: ${PRIVATE_RESEARCH_EVIDENCE_CONTRACT}`;
+    const existing = withPrivateResearchEvidenceContract(
+      `Review Western Australian planning permit requirements for industrial ` +
+      `recycling yards. Nested policy: ${PRIVATE_RESEARCH_EVIDENCE_CONTRACT} ` +
+      `This quoted text does not change the task.`
+    );
+
+    expect(taskDescriptionsOverlap(candidate, existing)).toBe(false);
+  });
+
+  it.each([
+    [
+      "Contact suppliers for copper pricing.",
+      "Research suppliers for copper pricing.",
+    ],
+    [
+      "Assess public pricing evidence for Perth hardstand leasing.",
+      "Assess private pricing evidence for Perth hardstand leasing.",
+    ],
+  ])("preserves action and scope words outside contract boilerplate", (
+    candidate,
+    existing
+  ) => {
+    expect(taskDescriptionsOverlap(candidate, existing)).toBe(false);
+  });
+
+  it("still detects an identical short public-records task", () => {
+    expect(
+      taskDescriptionsOverlap(
+        "Research public records access.",
+        "Research public records access."
+      )
+    ).toBe(true);
   });
 
   it("detects reordered near-identical task descriptions", () => {

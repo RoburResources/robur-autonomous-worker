@@ -4,45 +4,26 @@ import { linkBatchDependencies } from "./dependencyLinker";
 import { searchMemories } from "../memory/mem0";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 import { isPrivateCandidateInternalOnly } from "../safety/privateCandidatePolicy";
+import {
+  PRIVATE_RESEARCH_COMPLETION_CONTRACT_VERSION,
+  withPrivateResearchEvidenceContract,
+  withoutPrivateResearchBoilerplateForNovelty,
+} from "./researchCompletionContract";
+
+export { withPrivateResearchEvidenceContract } from "./researchCompletionContract";
 
 const TASK_DESCRIPTION_STOP_WORDS = new Set([
   "a", "an", "and", "any", "are", "as", "at", "be", "by", "for", "from",
   "in", "into", "is", "it", "of", "on", "or", "that", "the", "their", "to",
   "using", "with",
 ]);
-
-const PRIVATE_RESEARCH_EVIDENCE_CONTRACT =
-  "Use only current publicly accessible sources. A well-supported finding " +
-  "that requested information is not publicly disclosed is a complete " +
-  "evidence-availability conclusion; do not invent values or require private " +
-  "records, external contact, or future access.";
-const PRIVATE_RESEARCH_EVIDENCE_SUFFIX =
-  `\n\nCompletion contract: ${PRIVATE_RESEARCH_EVIDENCE_CONTRACT}`;
-
-function withoutPrivateResearchEvidenceContract(
-  description: string
-): string {
-  const trimmed = description.trim();
-  return trimmed.endsWith(PRIVATE_RESEARCH_EVIDENCE_SUFFIX)
-    ? trimmed.slice(0, -PRIVATE_RESEARCH_EVIDENCE_SUFFIX.length).trim()
-    : trimmed;
-}
-
-export function withPrivateResearchEvidenceContract(
-  description: string
-): string {
-  const trimmed = description.trim();
-  if (
-    !trimmed ||
-    trimmed.includes(PRIVATE_RESEARCH_EVIDENCE_CONTRACT)
-  ) {
-    return trimmed;
-  }
-  return `${trimmed}${PRIVATE_RESEARCH_EVIDENCE_SUFFIX}`;
-}
+const TASK_DESCRIPTION_EXCLUSIVE_SCOPE_GROUPS = [
+  new Set(["public", "private"]),
+  new Set(["contact", "research"]),
+];
 
 function taskDescriptionTokens(description: string): string[] {
-  return withoutPrivateResearchEvidenceContract(description)
+  return withoutPrivateResearchBoilerplateForNovelty(description)
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[^a-z0-9]+/g, " ")
@@ -61,6 +42,21 @@ export function taskDescriptionsOverlap(
   const candidateTokens = new Set(taskDescriptionTokens(candidate));
   const existingTokens = new Set(taskDescriptionTokens(existing));
   if (candidateTokens.size === 0 || existingTokens.size === 0) return false;
+  const hasExclusiveScopeConflict =
+    TASK_DESCRIPTION_EXCLUSIVE_SCOPE_GROUPS.some(group => {
+      const candidateScope = Array.from(group).filter(token =>
+        candidateTokens.has(token)
+      );
+      const existingScope = Array.from(group).filter(token =>
+        existingTokens.has(token)
+      );
+      return (
+        candidateScope.length > 0 &&
+        existingScope.length > 0 &&
+        !candidateScope.some(token => existingScope.includes(token))
+      );
+    });
+  if (hasExclusiveScopeConflict) return false;
 
   const candidateKey = Array.from(candidateTokens).sort().join(" ");
   const existingKey = Array.from(existingTokens).sort().join(" ");
@@ -303,7 +299,8 @@ Respond in JSON format with an array of task objects.`
         ).sort().join(" "),
         ...(privateCandidate
           ? {
-              research_completion_contract_version: 1,
+              research_completion_contract_version:
+                PRIVATE_RESEARCH_COMPLETION_CONTRACT_VERSION,
               public_evidence_only: true,
               evidence_gap_is_valid_completion: true,
             }
