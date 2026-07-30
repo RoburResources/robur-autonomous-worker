@@ -31,13 +31,13 @@ describe("schemaValidator — validateTaskInput", () => {
     expect(result.warnings.some(w => w.includes("No action type"))).toBe(true);
   });
 
-  it("warns on unknown action type", () => {
+  it("fails closed on unknown action type", () => {
     const result = validateTaskInput({
       description: "Do some unknown action with sufficient description length here",
       actionType: "teleport",
     });
-    expect(result.valid).toBe(true);
-    expect(result.warnings.some(w => w.includes("Unknown action type"))).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.includes("Unknown action type"))).toBe(true);
   });
 
   it("warns when outbound_call has no phone number", () => {
@@ -116,10 +116,10 @@ describe("schemaValidator — validateTaskOutput", () => {
     expect(result.errors.some(e => e.includes("too short"))).toBe(true);
   });
 
-  it("warns on unknown action type but still passes", () => {
+  it("fails output for an unknown action type", () => {
     const result = validateTaskOutput("unknown_action", "Some output here that is reasonable");
-    expect(result.valid).toBe(true);
-    expect(result.warnings.some(w => w.includes("No output schema"))).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.includes("No output schema"))).toBe(true);
   });
 });
 

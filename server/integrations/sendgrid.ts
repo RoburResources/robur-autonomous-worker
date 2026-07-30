@@ -130,8 +130,10 @@ async function sendViaSendGrid(payload: EmailPayload): Promise<EmailResult> {
       ...(payload.bodyHtml ? [{ type: "text/html", value: payload.bodyHtml }] : []),
     ],
     tracking_settings: {
-      click_tracking: { enable: true },
-      open_tracking: { enable: true },
+      // Preserve the approved message exactly. SendGrid tracking can rewrite
+      // links or add pixels, so it remains disabled.
+      click_tracking: { enable: false },
+      open_tracking: { enable: false },
     },
     custom_args: {
       task_metadata: JSON.stringify(payload.metadata || {}),
@@ -148,8 +150,13 @@ async function sendViaSendGrid(payload: EmailPayload): Promise<EmailResult> {
   });
 
   if (response.status === 202) {
-    // SendGrid returns 202 Accepted on success
-    const messageId = response.headers.get("X-Message-Id") || `sg_${Date.now()}`;
+    // Never fabricate a receipt after SendGrid may have accepted a message.
+    const messageId = response.headers.get("X-Message-Id")?.trim();
+    if (!messageId) {
+      throw new Error(
+        "SendGrid accepted the request without X-Message-Id; outcome requires reconciliation"
+      );
+    }
     return {
       success: true,
       messageId,

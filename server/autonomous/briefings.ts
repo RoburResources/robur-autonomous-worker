@@ -1,10 +1,48 @@
 import { invokeLLM } from "../_core/llm";
 import {
   getActiveGoals, getTasksByStatus, getRecentTasks, getRecentMetrics,
-  getOpportunities, logExecution, getConfig
+  getOpportunities, logExecution, getConfig, createTaskOnce
 } from "../db";
-import { makeBriefingCall } from "../integrations/retell";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
+
+async function queueBriefingCall(
+  briefingType: "morning" | "evening",
+  briefingContent: string
+): Promise<boolean> {
+  const ownerPhone =
+    process.env.OWNER_PHONE_E164 || (await getConfig("user_phone"));
+  if (!ownerPhone) {
+    throw new Error("Owner phone is not configured for briefing approval");
+  }
+  const perthDateParts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Perth",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    perthDateParts.find(entry => entry.type === type)?.value || "";
+  const perthDate = `${part("year")}-${part("month")}-${part("day")}`;
+  const queued = await createTaskOnce(
+    `scheduled_briefing:${briefingType}:${perthDate}`,
+    {
+    source: "scheduled_briefing",
+    description: `Deliver the owner-approved ${briefingType} briefing using the exact staged script.`,
+    actionType: "outbound_call",
+    actionPayload: {
+      phoneNumber: ownerPhone,
+      script: briefingContent,
+    },
+    priorityScore: 90,
+    metadata: {
+      briefing_type: briefingType,
+      exact_script_required: true,
+      briefing_slot: `${briefingType}:${perthDate}`,
+      queued_at: new Date().toISOString(),
+    },
+  });
+  return queued.created;
+}
 
 /**
  * Morning Briefing — 8:00am AWST (00:00 UTC)
@@ -51,13 +89,19 @@ Generate a natural, conversational briefing script for Addison to deliver.`
 
     const briefingContent = response.choices[0]?.message?.content as string || "Good morning Michael. Your autonomous system is running. Check the dashboard for details.";
 
-    // Make the call
-    const callResult = await makeBriefingCall("morning", briefingContent);
+    // Queue the exact script through the normal approval, claim, and provider
+    // gates. Scheduled code must never call an external provider directly.
+    const created = await queueBriefingCall("morning", briefingContent);
 
     await logExecution({
-      actionType: "morning_briefing",
-      details: { callId: callResult.callId, briefingLength: briefingContent.length },
-      outcome: "success",
+      actionType: created
+        ? "morning_briefing_queued"
+        : "morning_briefing_already_queued",
+      details: {
+        briefingLength: briefingContent.length,
+        exactArtifactApprovalRequired: true,
+      },
+      outcome: created ? "pending" : "success",
     });
 
     return { success: true };
@@ -114,13 +158,17 @@ Generate a natural evening summary for Addison to deliver.`
 
     const briefingContent = response.choices[0]?.message?.content as string || "Good evening Michael. Here's your daily wrap-up. Check the dashboard for full details.";
 
-    // Make the call
-    const callResult = await makeBriefingCall("evening", briefingContent);
+    const created = await queueBriefingCall("evening", briefingContent);
 
     await logExecution({
-      actionType: "evening_briefing",
-      details: { callId: callResult.callId, briefingLength: briefingContent.length },
-      outcome: "success",
+      actionType: created
+        ? "evening_briefing_queued"
+        : "evening_briefing_already_queued",
+      details: {
+        briefingLength: briefingContent.length,
+        exactArtifactApprovalRequired: true,
+      },
+      outcome: created ? "pending" : "success",
     });
 
     return { success: true };

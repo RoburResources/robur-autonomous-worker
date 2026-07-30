@@ -16,14 +16,20 @@ function getTwilioFromNumber(): string {
 
 export interface OutboundCallParams {
   agentId: string;
+  agentVersion: number;
   toNumber: string;
-  fromNumber?: string;
+  fromNumber: string;
+  approvedScript: string;
   metadata?: Record<string, any>;
 }
 
 export interface CallResult {
   callId: string;
   status: string;
+  agentId: string;
+  agentVersion: number;
+  fromNumber: string;
+  toNumber: string;
 }
 
 /**
@@ -40,9 +46,29 @@ export async function makeOutboundCall(params: OutboundCallParams): Promise<Call
     throw new Error("RETELL_API_KEY not configured");
   }
 
-  const fromNumber = params.fromNumber || getTwilioFromNumber();
-  if (!fromNumber) {
+  const fromNumber = params.fromNumber;
+  if (!/^\+[1-9]\d{7,14}$/.test(fromNumber)) {
     throw new Error("No from_number configured (TWILIO_PHONE_NUMBER)");
+  }
+  if (!/^\+[1-9]\d{7,14}$/.test(params.toNumber)) {
+    throw new Error("Invalid outbound Retell to_number");
+  }
+  if (!/^agent_[A-Za-z0-9_-]{8,190}$/.test(params.agentId)) {
+    throw new Error("Invalid pinned Retell agent ID");
+  }
+  if (
+    !Number.isInteger(params.agentVersion) ||
+    params.agentVersion < 0 ||
+    params.agentVersion > 1_000_000
+  ) {
+    throw new Error("Invalid pinned Retell agent version");
+  }
+  if (
+    typeof params.approvedScript !== "string" ||
+    params.approvedScript.length < 1 ||
+    params.approvedScript.length > 4_000
+  ) {
+    throw new Error("Invalid approved Retell script");
   }
 
   const response = await fetch(`${RETELL_API_URL}/v2/create-phone-call`, {
@@ -52,9 +78,13 @@ export async function makeOutboundCall(params: OutboundCallParams): Promise<Call
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      agent_id: params.agentId,
       to_number: params.toNumber,
       from_number: fromNumber,
+      override_agent_id: params.agentId,
+      override_agent_version: params.agentVersion,
+      retell_llm_dynamic_variables: {
+        approved_script: params.approvedScript,
+      },
       metadata: params.metadata || {},
     }),
   });
@@ -65,9 +95,38 @@ export async function makeOutboundCall(params: OutboundCallParams): Promise<Call
   }
 
   const data = await response.json();
+  const callId =
+    typeof data.call_id === "string" ? data.call_id.trim() : "";
+  if (!callId) {
+    throw new Error(
+      "Retell accepted the request without call_id; outcome requires reconciliation"
+    );
+  }
+  const returnedAgentId =
+    typeof data.agent_id === "string" ? data.agent_id.trim() : "";
+  const returnedAgentVersion = data.agent_version;
+  const returnedFrom =
+    typeof data.from_number === "string" ? data.from_number.trim() : "";
+  const returnedTo =
+    typeof data.to_number === "string" ? data.to_number.trim() : "";
+  if (
+    returnedAgentId !== params.agentId ||
+    returnedAgentVersion !== params.agentVersion ||
+    returnedFrom !== fromNumber ||
+    returnedTo !== params.toNumber ||
+    data.direction !== "outbound"
+  ) {
+    throw new Error(
+      "Retell accepted the request with an unexpected agent, version, sender, recipient, or direction; outcome requires reconciliation"
+    );
+  }
   return {
-    callId: data.call_id || data.id || "unknown",
-    status: data.status || "initiated",
+    callId,
+    status: data.call_status || data.status || "registered",
+    agentId: returnedAgentId,
+    agentVersion: returnedAgentVersion,
+    fromNumber: returnedFrom,
+    toNumber: returnedTo,
   };
 }
 
@@ -76,17 +135,28 @@ export async function makeOutboundCall(params: OutboundCallParams): Promise<Call
  */
 export async function makeBriefingCall(briefingType: "morning" | "evening", briefingContent: string): Promise<CallResult> {
   const agentId = process.env.RETELL_AGENT_ID || "";
+  const agentVersion = Number(process.env.RETELL_AGENT_VERSION);
   const userPhone = process.env.USER_PHONE || "";
-  if (!agentId || !userPhone) {
-    throw new Error("RETELL_AGENT_ID and USER_PHONE must be configured for briefing calls");
+  const fromNumber = getTwilioFromNumber();
+  if (
+    !agentId ||
+    !Number.isInteger(agentVersion) ||
+    !userPhone ||
+    !fromNumber
+  ) {
+    throw new Error(
+      "RETELL_AGENT_ID, RETELL_AGENT_VERSION, TWILIO_PHONE_NUMBER, and USER_PHONE must be configured for briefing calls"
+    );
   }
 
   return makeOutboundCall({
     agentId,
+    agentVersion,
     toNumber: userPhone,
+    fromNumber,
+    approvedScript: briefingContent,
     metadata: {
       briefing_type: briefingType,
-      briefing_content: briefingContent,
       timestamp: new Date().toISOString(),
     },
   });

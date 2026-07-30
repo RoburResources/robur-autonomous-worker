@@ -59,8 +59,14 @@ export async function sendSMS(
   }
 
   const data = await response.json();
+  const sid = typeof data.sid === "string" ? data.sid.trim() : "";
+  if (!/^SM[0-9a-fA-F]{32}$/.test(sid)) {
+    throw new Error(
+      "Twilio accepted the request without a valid Message SID; outcome requires reconciliation"
+    );
+  }
   return {
-    sid: data.sid || "unknown",
+    sid,
     status: data.status || "sent",
   };
 }

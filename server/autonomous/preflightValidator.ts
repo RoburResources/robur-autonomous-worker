@@ -9,6 +9,22 @@ export interface PreflightResult {
   warnings?: string[];
 }
 
+export function parsePositiveIntegerLimit(
+  rawValue: string | null | undefined,
+  fallback: number
+): number | null {
+  if (!Number.isSafeInteger(fallback) || fallback <= 0) {
+    throw new Error("Limit fallback must be a positive safe integer");
+  }
+  const normalized =
+    rawValue === null || rawValue === undefined
+      ? String(fallback)
+      : rawValue.trim();
+  if (!/^[1-9]\d*$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 /**
  * Pre-flight validation gate — checks before any task executes:
  * - Required credentials/tools are available
@@ -46,10 +62,17 @@ export async function runPreflightValidation(task: any): Promise<PreflightResult
   }
 
   if (actionType === "send_email") {
-    // Email sending requires SMTP or Make.com webhook
-    const emailWebhook = await getConfig("email_webhook_url");
-    if (!emailWebhook) {
-      warnings.push("No email webhook configured — email will be drafted only, not sent");
+    const payload = normalizeTaskMetadata(task.actionPayload);
+    const metadata = normalizeTaskMetadata(task.metadata);
+    const recipient =
+      (typeof payload.email === "string" && payload.email.trim()) ||
+      (typeof metadata.recipientEmail === "string" &&
+        metadata.recipientEmail.trim()) ||
+      "";
+    if (recipient && !process.env.SENDGRID_API_KEY) {
+      issues.push("SENDGRID_API_KEY not configured");
+    } else if (!recipient) {
+      warnings.push("No email recipient configured — email will remain a draft");
     }
   }
 
@@ -81,14 +104,24 @@ export async function runPreflightValidation(task: any): Promise<PreflightResult
   }
 
   // ── 5. Check hard limits ──────────────────────────────────────────────────
-  const maxApiSpendCents = parseInt(await getConfig("max_api_spend_cents_per_day") || "5000");
-  const maxCalls = parseInt(await getConfig("max_calls_per_day") || "20");
-  const maxEmails = parseInt(await getConfig("max_emails_per_day") || "100");
+  const maxApiSpendCents = parsePositiveIntegerLimit(
+    await getConfig("max_api_spend_cents_per_day"),
+    5000
+  );
+  const maxCalls = parsePositiveIntegerLimit(
+    await getConfig("max_calls_per_day"),
+    20
+  );
+  const maxEmails = parsePositiveIntegerLimit(
+    await getConfig("max_emails_per_day"),
+    100
+  );
 
   // These are checked again in executor but we validate config is sane
-  if (maxApiSpendCents <= 0) issues.push("Invalid max_api_spend_cents_per_day config");
-  if (maxCalls <= 0) issues.push("Invalid max_calls_per_day config");
-  if (maxEmails <= 0) issues.push("Invalid max_emails_per_day config");
+  if (maxApiSpendCents === null)
+    issues.push("Invalid max_api_spend_cents_per_day config");
+  if (maxCalls === null) issues.push("Invalid max_calls_per_day config");
+  if (maxEmails === null) issues.push("Invalid max_emails_per_day config");
 
   // ── 6. Result ─────────────────────────────────────────────────────────────
   if (issues.length > 0) {

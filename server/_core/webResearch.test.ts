@@ -13,7 +13,7 @@ function groundedResponse() {
     model: "gpt-5.6-luna",
     status: "completed",
     incomplete_details: null,
-    output_text: "Two source-backed findings with inline citations.",
+    output_text: "Two source-backed findings with clear inline citations.",
     output: [
       {
         type: "web_search_call" as const,
@@ -35,7 +35,7 @@ function groundedResponse() {
         content: [
           {
             type: "output_text" as const,
-            text: "Two source-backed findings with inline citations.",
+            text: "Two source-backed findings with clear inline citations.",
             annotations: [
               {
                 type: "url_citation" as const,

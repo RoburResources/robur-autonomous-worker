@@ -33,9 +33,11 @@ describe("private-candidate provider containment", () => {
 
     await expect(
       makeOutboundCall({
-        agentId: "agent_test",
+        agentId: "agent_test12345",
+        agentVersion: 1,
         toNumber: "+61400000000",
         fromNumber: "+61411111111",
+        approvedScript: "This approved script must remain contained.",
       })
     ).rejects.toThrow("blocked by private-candidate containment");
     expect(fetchMock).not.toHaveBeenCalled();

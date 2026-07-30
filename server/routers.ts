@@ -12,7 +12,8 @@ import {
 } from "./safety/legacyWorkerGate";
 import {
   getAllGoals, getActiveGoals, createGoal, updateGoal,
-  getRecentTasks, getTasksByStatus, updateTaskByOwnerWithAudit, createTask,
+  getRecentTasks, getTasksByStatus, updateTaskByOwnerWithAudit,
+  reconcileExternalOutcomeByOwner, createTask,
   getRecentExecutions, getExecutionsForTask,
   getRecentEvaluations,
   getOpportunities, createOpportunity, updateOpportunity,
@@ -95,21 +96,77 @@ export const appRouter = router({
       .input(z.object({
         id: z.number().int().positive(),
         status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled", "awaiting_approval"]).optional(),
+        expectedStatus: z.enum(["pending", "in_progress", "completed", "failed", "cancelled", "awaiting_approval"]).optional(),
+        approvalFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+        approvalRequestId: z.string().uuid().optional(),
         priorityScore: z.number().int().min(1).max(100).optional(),
       }).refine(
         input => input.status !== undefined || input.priorityScore !== undefined,
         { message: "A status or priority update is required" }
+      ).refine(
+        input => input.status === undefined || input.expectedStatus !== undefined,
+        { message: "The current task status is required for a status update" }
       ))
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
-        const result = await updateTaskByOwnerWithAudit(id, data);
+        const result = await updateTaskByOwnerWithAudit(id, {
+          ...data,
+          ...(data.status === "pending" &&
+          data.expectedStatus === "awaiting_approval"
+            ? { approvalSource: "owner_dashboard" as const }
+            : {}),
+        });
         if (result.outcome === "not_found") {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Task not found",
           });
         }
+        if (result.outcome === "approval_stale") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "Task details changed after approval was requested; review the current task before approving it",
+          });
+        }
+        if (result.outcome === "state_conflict") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "Task status changed before this update; refresh the task and try again",
+          });
+        }
         return { success: true };
+      }),
+    reconcileExternalOutcome: ownerProcedure
+      .input(
+        z.object({
+          id: z.number().int().positive(),
+          resolution: z.enum([
+            "confirmed_completed",
+            "confirmed_not_performed",
+            "cancelled_unknown",
+          ]),
+          evidence: z.string().trim().min(10).max(2_000),
+          expectedReconciliationId: z.string().uuid(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const result = await reconcileExternalOutcomeByOwner(input.id, input);
+        if (result.outcome === "not_found") {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Task not found",
+          });
+        }
+        if (result.outcome === "state_conflict") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "This reconciliation request is stale or no longer applies; refresh the task before deciding",
+          });
+        }
+        return result;
       }),
     create: ownerProcedure
       .input(z.object({

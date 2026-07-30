@@ -34,8 +34,8 @@ const OUTPUT_SCHEMAS: Record<string, OutputSchema> = {
     forbidden: [],
   },
   send_email: {
-    required: ["emailDraft"],
-    minLength: { emailDraft: 50 },
+    required: ["body"],
+    minLength: { body: 50 },
     forbidden: [],
   },
   send_sms: {
@@ -49,6 +49,32 @@ interface OutputSchema {
   required: string[];
   minLength: Record<string, number>;
   forbidden: string[];
+}
+
+function labeledFieldValue(
+  resultSummary: string,
+  field: string
+): string | null {
+  const labelPattern = field
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[\\s_-]*");
+  const marker = new RegExp(`\\b${labelPattern}\\s*:\\s*`, "i").exec(
+    resultSummary
+  );
+  if (!marker) return null;
+
+  const remainder = resultSummary.slice(marker.index + marker[0].length);
+  const candidateEnds = [
+    remainder.indexOf(" | "),
+    remainder.search(/\n\s*[A-Za-z][A-Za-z0-9 _-]{0,30}:\s*/),
+  ].filter(index => index >= 0);
+  const end =
+    candidateEnds.length > 0 ? Math.min(...candidateEnds) : remainder.length;
+  const value = remainder.slice(0, end).trim();
+  return value || null;
 }
 
 /**
@@ -72,9 +98,12 @@ export function validateTaskOutput(
 
   const schema = OUTPUT_SCHEMAS[actionType];
   if (!schema) {
-    // No schema defined for this action type — warn but allow
-    warnings.push(`No output schema defined for action type: ${actionType}`);
-    return { valid: true, errors: [], warnings };
+    // An explicit unknown contract must never inherit a permissive fallback.
+    return {
+      valid: false,
+      errors: [`No output schema defined for action type: ${actionType}`],
+      warnings,
+    };
   }
 
   // Check forbidden phrases (hallucination indicators)
@@ -84,10 +113,20 @@ export function validateTaskOutput(
     }
   }
 
-  // Check minimum length requirements
+  // Required labels bind the prose result to the action-specific contract.
+  for (const field of schema.required) {
+    if (labeledFieldValue(resultSummary, field) === null) {
+      errors.push(`Output is missing required field: ${field}`);
+    }
+  }
+
+  // Check minimum length requirements on the actual labeled field value.
   for (const [field, minLen] of Object.entries(schema.minLength)) {
-    if (resultSummary.length < minLen) {
-      errors.push(`Output too short: expected at least ${minLen} characters for ${field}, got ${resultSummary.length}`);
+    const fieldValue = labeledFieldValue(resultSummary, field);
+    if (fieldValue !== null && fieldValue.length < minLen) {
+      errors.push(
+        `Output too short: expected at least ${minLen} characters for ${field}, got ${fieldValue.length}`
+      );
     }
   }
 
@@ -149,7 +188,7 @@ export function validateTaskInput(task: {
 
   const validActionTypes = ["outbound_call", "send_email", "send_sms", "web_research", "data_entry"];
   if (task.actionType && !validActionTypes.includes(task.actionType)) {
-    warnings.push(`Unknown action type: ${task.actionType} — will attempt as web_research`);
+    errors.push(`Unknown action type: ${task.actionType}`);
   }
 
   // Action-specific input validation
@@ -162,7 +201,7 @@ export function validateTaskInput(task: {
 
   if (task.actionType === "send_email") {
     const payload = task.actionPayload as Record<string, unknown> | null;
-    if (!payload?.toEmail && !payload?.to) {
+    if (!payload?.email) {
       warnings.push("No target email address in actionPayload — email will be drafted only");
     }
   }

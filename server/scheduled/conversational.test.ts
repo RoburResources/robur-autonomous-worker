@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const dbMocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   createTask: vi.fn(),
+  createTaskOnce: vi.fn(),
   logExecution: vi.fn(),
   getConfig: vi.fn(),
 }));
@@ -23,12 +24,20 @@ const twilioMocks = vi.hoisted(() => ({
 const llmMocks = vi.hoisted(() => ({
   invokeLLM: vi.fn(),
 }));
+const gateMocks = vi.hoisted(() => ({
+  getLegacyWorkerRuntimeGate: vi.fn(),
+}));
 
 vi.mock("../db", () => dbMocks);
 vi.mock("../integrations/twilio", () => twilioMocks);
 vi.mock("../_core/llm", () => llmMocks);
+vi.mock("../safety/legacyWorkerGate", () => gateMocks);
 
 import { isStructuredCommand, handleConversationalSMS } from "./smsConversation";
+
+beforeEach(() => {
+  gateMocks.getLegacyWorkerRuntimeGate.mockResolvedValue({ allowed: true });
+});
 
 describe("isStructuredCommand", () => {
   it("identifies STOP as a structured command", () => {
@@ -146,6 +155,7 @@ describe("handleConversationalSMS — Natural language instruction", () => {
     vi.clearAllMocks();
     dbMocks.getConfig.mockResolvedValue(null);
     dbMocks.createTask.mockResolvedValue([{ insertId: 999 }]);
+    dbMocks.createTaskOnce.mockResolvedValue({ created: true, taskId: 999 });
     twilioMocks.sendSMS.mockResolvedValue(undefined);
     llmMocks.invokeLLM.mockResolvedValue({
       choices: [{
@@ -192,6 +202,169 @@ describe("handleConversationalSMS — Natural language instruction", () => {
         source: "sms_instruction",
       })
     );
+  });
+
+  it("uses the provider delivery key to prevent duplicate task creation after a webhook retry", async () => {
+    await handleConversationalSMS(
+      "Research scrap metal prices in Perth",
+      "+61495007200",
+      "twilio:SM00000000000000000000000000000000"
+    );
+
+    expect(dbMocks.createTask).not.toHaveBeenCalled();
+    expect(dbMocks.createTaskOnce).toHaveBeenCalledWith(
+      "twilio:SM00000000000000000000000000000000:task:0",
+      expect.objectContaining({
+        description: expect.stringContaining("scrap metal prices"),
+        source: "sms_instruction",
+      })
+    );
+  });
+
+  it("canonicalizes an owner email instruction to the executor email payload", async () => {
+    llmMocks.invokeLLM.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              tasks: [
+                {
+                  description: "Send the approved project update to the owner.",
+                  actionType: "send_email",
+                  priorityScore: 80,
+                  actionPayload: {
+                    recipientEmail: "owner@example.test",
+                    subject: "Project update",
+                  },
+                },
+              ],
+              reply: "I prepared the email task.",
+            }),
+          },
+        },
+      ],
+    });
+
+    await handleConversationalSMS(
+      "Email the project update to owner@example.test",
+      "+61495007200"
+    );
+
+    expect(dbMocks.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: "send_email",
+        actionPayload: {
+          email: "owner@example.test",
+          subject: "Project update",
+        },
+      })
+    );
+  });
+
+  it("rejects an oversized model task batch before inserting any model-proposed task", async () => {
+    llmMocks.invokeLLM.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              tasks: Array.from({ length: 4 }, (_, index) => ({
+                description: `Research bounded topic number ${index + 1}`,
+                actionType: "web_research",
+                priorityScore: 80,
+              })),
+              reply: "I prepared four tasks.",
+            }),
+          },
+        },
+      ],
+    });
+
+    await handleConversationalSMS(
+      "Research four separate topics",
+      "+61495007200"
+    );
+
+    expect(dbMocks.createTask).toHaveBeenCalledTimes(1);
+    expect(dbMocks.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: "[From Tarz SMS] Research four separate topics",
+        actionType: "web_research",
+      })
+    );
+  });
+
+  it("validates the whole model batch before inserting its first task", async () => {
+    llmMocks.invokeLLM.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              tasks: [
+                {
+                  description: "Research one bounded internal topic",
+                  actionType: "web_research",
+                  priorityScore: 80,
+                },
+                {
+                  description: "Send an invalid unbounded task",
+                  actionType: "send_sms",
+                  priorityScore: 1_000,
+                },
+              ],
+              reply: "I prepared the tasks.",
+            }),
+          },
+        },
+      ],
+    });
+
+    await handleConversationalSMS(
+      "Research one topic and send an update",
+      "+61495007200"
+    );
+
+    expect(dbMocks.createTask).toHaveBeenCalledTimes(1);
+    expect(dbMocks.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description:
+          "[From Tarz SMS] Research one topic and send an update",
+        actionType: "web_research",
+      })
+    );
+  });
+
+  it("does not create a fallback duplicate when only the confirmation reply fails", async () => {
+    twilioMocks.sendSMS.mockRejectedValueOnce(
+      new Error("confirmation provider unavailable")
+    );
+
+    await handleConversationalSMS(
+      "Research scrap metal prices in Perth",
+      "+61495007200"
+    );
+
+    expect(dbMocks.createTask).toHaveBeenCalledTimes(1);
+    expect(dbMocks.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: expect.stringContaining("scrap metal prices"),
+      })
+    );
+  });
+
+  it("stops before task creation and reply when the gate changes during LLM work", async () => {
+    gateMocks.getLegacyWorkerRuntimeGate
+      .mockResolvedValueOnce({ allowed: true })
+      .mockResolvedValueOnce({ allowed: true })
+      .mockResolvedValueOnce({ allowed: false, reason: "paused" });
+
+    await handleConversationalSMS(
+      "Research a bounded internal topic",
+      "+61495007200"
+    );
+
+    expect(llmMocks.invokeLLM).toHaveBeenCalledTimes(1);
+    expect(dbMocks.createTask).not.toHaveBeenCalled();
+    expect(twilioMocks.sendSMS).not.toHaveBeenCalled();
   });
 });
 
