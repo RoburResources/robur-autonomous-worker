@@ -9,6 +9,7 @@ import {
   decimal,
   boolean,
   index,
+  uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
 /**
@@ -145,6 +146,63 @@ export const systemConfig = mysqlTable("system_config", {
 
 export type SystemConfigEntry = typeof systemConfig.$inferSelect;
 export type InsertSystemConfigEntry = typeof systemConfig.$inferInsert;
+
+/**
+ * Durable provider-webhook inbox. Provider delivery is acknowledged only
+ * after a row exists here; an internal worker owns processing and recovery.
+ */
+export const providerWebhookInbox = mysqlTable(
+  "provider_webhook_inbox",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    eventKey: varchar("eventKey", { length: 128 }).notNull(),
+    eventType: varchar("eventType", { length: 64 }).notNull(),
+    externalId: varchar("externalId", { length: 200 }).notNull(),
+    payloadDigest: varchar("payloadDigest", { length: 64 }).notNull(),
+    payload: json("payload").notNull(),
+    state: mysqlEnum("state", [
+      "pending",
+      "processing",
+      "completed",
+      "terminal_failure",
+    ])
+      .default("pending")
+      .notNull(),
+    attemptCount: int("attemptCount").default(0).notNull(),
+    leaseToken: varchar("leaseToken", { length: 36 }),
+    leaseUntil: timestamp("leaseUntil"),
+    nextAttemptAt: timestamp("nextAttemptAt"),
+    workProduct: json("workProduct"),
+    lastError: text("lastError"),
+    receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    completedAt: timestamp("completedAt"),
+    failedAt: timestamp("failedAt"),
+  },
+  table => [
+    uniqueIndex("provider_webhook_event_unique").on(
+      table.provider,
+      table.eventKey
+    ),
+    index("provider_webhook_state_retry_idx").on(
+      table.provider,
+      table.state,
+      table.nextAttemptAt,
+      table.receivedAt
+    ),
+    index("provider_webhook_external_idx").on(
+      table.provider,
+      table.externalId,
+      table.eventType
+    ),
+  ]
+);
+
+export type ProviderWebhookInboxEntry =
+  typeof providerWebhookInbox.$inferSelect;
+export type InsertProviderWebhookInboxEntry =
+  typeof providerWebhookInbox.$inferInsert;
 
 /**
  * Daily Metrics — aggregated daily stats

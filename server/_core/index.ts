@@ -19,20 +19,32 @@ import {
   eveningBriefingHandler,
 } from "../scheduled/handlers";
 import { smsWebhookHandler } from "../scheduled/smsWebhook";
-import { retellWebhookHandler } from "../scheduled/retellWebhook";
+import { startInboundSmsInboxWorker } from "../scheduled/smsWebhookInbox";
+import {
+  retellWebhookHandler,
+  startRetellWebhookInboxWorker,
+} from "../scheduled/retellWebhook";
+import { startRetellTerminalReconciler } from "../scheduled/retellReconciler";
 import { addisonVoiceWebhookHandler } from "../scheduled/voiceWebhook";
 import { retellCreateTaskHandler } from "../scheduled/retellToolHandler";
 import { startPrivateCandidateScheduler } from "../autonomous/privateCandidateScheduler";
+import {
+  getServiceReadiness,
+  startBackgroundWorkersWhenReady,
+} from "./readiness";
 import {
   enforceLegacyWorkerRetirement,
   getLegacyWorkerRuntimeGate,
 } from "../safety/legacyWorkerGate";
 import {
+  createEmergencySmsIngressRateLimiter,
   createRateLimiter,
+  isEmergencySmsIngress,
   requireSameOriginMutation,
   securityHeaders,
 } from "./httpSecurity";
 import { blockPrivateCandidateProviderIngress } from "../safety/privateCandidatePolicy";
+import { captureRawJsonBody } from "./rawBody";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -58,12 +70,14 @@ async function startServer() {
   const server = createServer(app);
   app.disable("x-powered-by");
   app.use(securityHeaders);
+  app.use(createEmergencySmsIngressRateLimiter());
   app.use(
     "/api",
     createRateLimiter({
       max: 300,
       windowMs: 15 * 60 * 1000,
       namespace: "api",
+      skip: isEmergencySmsIngress,
     })
   );
   app.use(
@@ -80,6 +94,7 @@ async function startServer() {
       max: 60,
       windowMs: 60 * 1000,
       namespace: "webhooks",
+      skip: isEmergencySmsIngress,
     })
   );
   app.use(
@@ -98,7 +113,7 @@ async function startServer() {
       : "[Safety] Legacy worker is retired/paused"
   );
   // This service has no direct upload route. Keep request bodies tightly bounded.
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({ limit: "1mb", verify: captureRawJsonBody }));
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
   app.use("/api/trpc", requireSameOriginMutation);
   app.use("/api/webhooks", blockPrivateCandidateProviderIngress);
@@ -122,11 +137,15 @@ async function startServer() {
 
   // ─── Health Check ─────────────────────────────────────────────────────────
   app.get("/api/health", async (_req, res) => {
-    const gate = await getLegacyWorkerRuntimeGate();
-    res.json({
-      status: "ok",
+    const [gate, readiness] = await Promise.all([
+      getLegacyWorkerRuntimeGate(),
+      getServiceReadiness(),
+    ]);
+    res.status(readiness.ready ? 200 : 503).json({
+      status: readiness.ready ? "ok" : "not_ready",
       timestamp: new Date().toISOString(),
       service: "robur-autonomous-worker",
+      databaseSchema: readiness.databaseSchema,
       legacyWorkerStatus: gate.allowed ? "enabled" : "retired_or_paused",
       autonomousExecution: gate.allowed,
     });
@@ -156,7 +175,18 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
-    startPrivateCandidateScheduler();
+    void startBackgroundWorkersWhenReady([
+      startRetellWebhookInboxWorker,
+      startRetellTerminalReconciler,
+      startInboundSmsInboxWorker,
+      startPrivateCandidateScheduler,
+    ]).then(started => {
+      if (!started) {
+        console.error(
+          "[Readiness] Background workers remain stopped until the database migration is applied"
+        );
+      }
+    });
   });
 }
 

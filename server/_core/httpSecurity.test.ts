@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { NextFunction, Request, Response } from "express";
 import {
+  createEmergencySmsIngressRateLimiter,
   createRateLimiter,
+  isEmergencySmsIngress,
   requireSameOriginMutation,
   securityHeaders,
 } from "./httpSecurity";
@@ -96,6 +98,67 @@ describe("HTTP security middleware", () => {
     }
 
     expect(next).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let unauthenticated traffic consume the emergency SMS path budget", () => {
+    const limiter = createRateLimiter({
+      max: 1,
+      windowMs: 60_000,
+      namespace: "emergency-sms",
+      skip: isEmergencySmsIngress,
+    });
+    const next = vi.fn();
+    const emergencyRequest = {
+      method: "POST",
+      originalUrl: "/api/webhooks/sms",
+      socket: { remoteAddress: "10.0.0.1" },
+      headers: {},
+    } as unknown as Request;
+
+    for (let index = 0; index < 100; index += 1) {
+      limiter(emergencyRequest, responseMock().response, next);
+    }
+    const genuineStop = responseMock();
+    limiter(emergencyRequest, genuineStop.response, next);
+
+    expect(next).toHaveBeenCalledTimes(101);
+    expect(genuineStop.response.status).not.toHaveBeenCalledWith(429);
+  });
+
+  it("keeps the reserved emergency SMS ingress bounded independently", () => {
+    const limiter = createEmergencySmsIngressRateLimiter();
+    const next = vi.fn();
+    const emergencyRequest = {
+      method: "POST",
+      originalUrl: "/api/webhooks/sms",
+      socket: { remoteAddress: "10.0.0.1" },
+      headers: {},
+    } as unknown as Request;
+
+    for (let index = 0; index < 120; index += 1) {
+      limiter(emergencyRequest, responseMock().response, next);
+    }
+    const rejected = responseMock();
+    limiter(emergencyRequest, rejected.response, next);
+
+    expect(next).toHaveBeenCalledTimes(120);
+    expect(rejected.response.status).toHaveBeenCalledWith(429);
+  });
+
+  it("exempts only the exact POST SMS webhook route", () => {
+    expect(
+      isEmergencySmsIngress({
+        method: "POST",
+        originalUrl: "/api/webhooks/sms?retry=1",
+      } as Request)
+    ).toBe(true);
+    for (const request of [
+      { method: "GET", originalUrl: "/api/webhooks/sms" },
+      { method: "POST", originalUrl: "/api/webhooks/sms/other" },
+      { method: "POST", originalUrl: "/api/webhooks/retell" },
+    ]) {
+      expect(isEmergencySmsIngress(request as Request)).toBe(false);
+    }
   });
 
   it("rejects invalid limiter configuration", () => {

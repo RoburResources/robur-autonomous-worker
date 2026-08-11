@@ -22,14 +22,27 @@ true:
 
 - `PRIVATE_CANDIDATE_INTERNAL_ONLY=true`
 - `PRIVATE_CANDIDATE_INTERNAL_AUTONOMY=true`
+- `LEGACY_WORKER_ENABLED=true`
+- `LEGACY_WORKER_RISK_ACK=I_ACCEPT_LEGACY_WORKER_AUTONOMY_RISK`
+- at least one exact verified owner identity is configured through
+  `OWNER_OPEN_ID` or `OWNER_PHONE_E164`
+- `EXTERNAL_EFFECTS_EXACT_ARTIFACT_CERTIFIED=false`
+- `RETELL_EXACT_SCRIPT_AGENT_CERTIFIED=false`
+- `RETELL_EVENT_WEBHOOK_CERTIFIED=false`
+- `RETELL_CUSTOM_TOOL_CHANNEL_CERTIFIED=false`
+- `RETELL_TERMINAL_RECONCILIATION_CERTIFIED=false`
+- `OWNER_SMS_COMMAND_CHANNEL_CERTIFIED=false`
 - only `web_research` and `data_entry` tasks are executable
-- no public or custom domain
+- no custom or additional domain; retain only the canonical Railway service
+  domain below behind owner authentication
 - no Railway or provider cron schedules
 - no provider webhooks pointing to this service
 - no production, Rachel, payment, call, SMS, or email changes
 - owner-only reads and writes
 
-The in-process scheduler may be activated with:
+After the deployment gates above are bound to the exact private environment, a
+verified owner may activate the in-process scheduler with the following atomic
+database state:
 
 - `kill_switch_active=false`
 - `system_status=active`
@@ -76,6 +89,49 @@ state or creates a task.
 The execution adapter remains WSL2-only. The Windows-native route is rejected
 and must not be represented as certified. The authoritative adapter evidence is
 in `../private/codex-adapter/CERTIFICATION.md`.
+
+## Immutable migration and deployment sequence
+
+Keep the worker paused throughout migration and the first deployment. Every
+Railway command must use the opaque IDs in **Authoritative target**; names alone
+are not sufficient.
+
+1. Freeze the candidate in Git, push `codex/private-railway-auth`, and verify the
+   remote SHA exactly matches `git rev-parse HEAD`.
+2. Record the current successful deployment ID/image, prove production has zero
+   service and volume instances, and create a fresh logical backup of the exact
+   private MySQL service.
+3. Set every provider certification variable explicitly to `false` with
+   `--skip-deploys`. Keep `LEGACY_WORKER_ENABLED` and
+   `LEGACY_WORKER_RISK_ACK` absent for the first fail-closed deployment.
+4. From the immutable commit, bind Railway source to the candidate branch and
+   apply migrations only through the exact private target:
+
+```powershell
+$project = 'c27db74c-5419-4c45-a403-1fafeba56829'
+$environment = '894781b5-86ed-4df3-9f42-1393320bd857'
+$appService = '31c607a8-09b6-40b1-955a-f952571c3e0d'
+$mysqlService = '935f0801-a45c-4da0-9384-7afe2c8923a2'
+
+railway run --project $project --environment $environment --service $mysqlService --no-local -- `
+  powershell -NoProfile -Command `
+  '$env:DATABASE_URL=$env:MYSQL_PUBLIC_URL; & .\node_modules\.bin\drizzle-kit.CMD migrate; exit $LASTEXITCODE'
+```
+
+   `railway run` executes locally, so this deliberately sources the exact MySQL
+   service variables and maps its public tunnel URL only into the short-lived
+   migration process. Never print either URL. Immediately read back
+   `provider_webhook_inbox`, its unique/retry/external
+   indexes, and the Drizzle migration row. Run the same migration command a
+   second time and prove it is a no-op.
+5. Deploy only the exact private application service. Require the deployment to
+   be `SUCCESS/RUNNING`, bind its image and source SHA, and verify health remains
+   paused, anonymous access is denied, background workers are schema-gated, and
+   every provider-effect count remains unchanged.
+6. Internal autonomy may be activated only as a separate owner-authorized step
+   after all private deployment gates pass. Provider certification variables
+   remain false; call, SMS, email, payment, DNS, and production effects remain
+   prohibited.
 
 ## Security controls
 

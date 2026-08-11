@@ -147,6 +147,189 @@ export async function getTaskById(id: number) {
   return results[0] || null;
 }
 
+type ProviderReceiptLookupDatabase = Pick<
+  NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  "select"
+>;
+
+/**
+ * Resolve an external callback only through the exact provider receipt that
+ * was durably attached to a task before its execution claim completed.
+ */
+export async function getTaskByExternalProviderReceipt(
+  provider: "retell" | "sendgrid" | "twilio",
+  receiptId: string,
+  databaseOverride?: ProviderReceiptLookupDatabase
+) {
+  if (!receiptId || receiptId.length > 500) return null;
+  const db = databaseOverride ?? (await getDb());
+  if (!db) throw new Error("Database is not available");
+  const results = await db
+    .select()
+    .from(taskQueue)
+    .where(
+      and(
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${taskQueue.metadata}, '$.external_provider_receipt.provider')) = ${provider}`,
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${taskQueue.metadata}, '$.external_provider_receipt.receiptId')) = ${receiptId}`
+      )
+    )
+    .limit(2);
+  if (results.length > 1) {
+    throw new Error("External provider receipt is not uniquely correlated");
+  }
+  return results[0] || null;
+}
+
+/**
+ * Return only Retell calls that are still awaiting terminal provider truth.
+ * This is the bounded input to the read-only Get Call reconciler.
+ */
+export async function getRetellProviderPendingTasks(
+  staleBefore: Date,
+  limit = 25,
+  databaseOverride?: ProviderReceiptLookupDatabase
+): Promise<Task[]> {
+  if (
+    !Number.isFinite(staleBefore.getTime()) ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 100
+  ) {
+    return [];
+  }
+  const db = databaseOverride ?? (await getDb());
+  if (!db) throw new Error("Database is not available");
+  return db
+    .select()
+    .from(taskQueue)
+    .where(
+      and(
+        eq(taskQueue.status, "in_progress"),
+        eq(taskQueue.actionType, "outbound_call"),
+        lte(taskQueue.updatedAt, staleBefore),
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${taskQueue.metadata}, '$.external_provider_receipt.provider')) = 'retell'`,
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${taskQueue.metadata}, '$.external_provider_terminal_pending')) = 'true'`
+      )
+    )
+    .orderBy(asc(taskQueue.updatedAt), asc(taskQueue.id))
+    .limit(limit);
+}
+
+export type RetellTaskCallbackResolution =
+  | "call_ended"
+  | "completed"
+  | "failed"
+  | "reconciliation_required";
+
+export type RetellTaskCallbackResult =
+  | { outcome: "updated"; status: Task["status"] }
+  | { outcome: "stale" };
+
+type RetellTaskCallbackDatabase = Pick<
+  NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  "update"
+>;
+
+/**
+ * Apply a correlated Retell callback only while the exact provider receipt is
+ * still waiting for terminal truth. This prevents an unrelated or replayed
+ * call from completing, failing, or unlocking the task.
+ */
+export async function applyRetellTaskCallback(
+  taskId: number,
+  receiptId: string,
+  resolution: RetellTaskCallbackResolution,
+  callback: {
+    eventType: "call_ended" | "call_analyzed";
+    callSuccessful?: boolean;
+    callSummary?: string;
+    userSentiment?: string;
+    disconnectionReason?: string;
+    callStatus?: string;
+  },
+  now = new Date(),
+  databaseOverride?: RetellTaskCallbackDatabase
+): Promise<RetellTaskCallbackResult> {
+  if (
+    !Number.isSafeInteger(taskId) ||
+    taskId < 1 ||
+    !receiptId ||
+    receiptId.length > 500 ||
+    !Number.isFinite(now.getTime())
+  ) {
+    return { outcome: "stale" };
+  }
+  const db = databaseOverride ?? (await getDb());
+  if (!db) throw new Error("Database is not available");
+  const boundedCallback = {
+    eventType: callback.eventType,
+    receivedAt: now.toISOString(),
+    ...(callback.callSuccessful === undefined
+      ? {}
+      : { callSuccessful: callback.callSuccessful }),
+    ...(callback.callSummary
+      ? { callSummary: callback.callSummary.slice(0, 2_000) }
+      : {}),
+    ...(callback.userSentiment
+      ? { userSentiment: callback.userSentiment.slice(0, 128) }
+      : {}),
+    ...(callback.disconnectionReason
+      ? { disconnectionReason: callback.disconnectionReason.slice(0, 128) }
+      : {}),
+    ...(callback.callStatus
+      ? { callStatus: callback.callStatus.slice(0, 64) }
+      : {}),
+  };
+  const serializedCallback = JSON.stringify(boundedCallback);
+  const reconciliationId =
+    resolution === "reconciliation_required" ? randomUUID() : undefined;
+  const nextStatus: Task["status"] =
+    resolution === "completed"
+      ? "completed"
+      : resolution === "failed"
+        ? "failed"
+        : resolution === "reconciliation_required"
+          ? "awaiting_approval"
+          : "in_progress";
+  const resultSummary =
+    resolution === "completed"
+      ? `Retell call completed successfully: ${boundedCallback.callSummary || receiptId}`
+      : resolution === "failed"
+        ? `Retell call completed without the approved outcome: ${boundedCallback.callSummary || boundedCallback.disconnectionReason || receiptId}`
+        : resolution === "reconciliation_required"
+          ? "Retell terminal callback did not prove an exact outcome; owner reconciliation is required"
+          : `Retell call ended; awaiting post-call analysis: ${receiptId}`;
+  const metadata =
+    resolution === "call_ended"
+      ? sql`JSON_SET(COALESCE(${taskQueue.metadata}, JSON_OBJECT()), '$.retell_call_ended', CAST(${serializedCallback} AS JSON))`
+      : resolution === "reconciliation_required"
+        ? sql`JSON_SET(JSON_REMOVE(COALESCE(${taskQueue.metadata}, JSON_OBJECT()), '$.execution_claim_token', '$.execution_claimed_at'), '$.external_provider_terminal_pending', false, '$.external_outcome_reconciliation_required', true, '$.external_outcome_reconciliation_at', ${now.toISOString()}, '$.external_outcome_reconciliation_id', ${reconciliationId}, '$.external_outcome_provider', 'retell', '$.retell_terminal_callback', CAST(${serializedCallback} AS JSON))`
+        : sql`JSON_SET(JSON_REMOVE(COALESCE(${taskQueue.metadata}, JSON_OBJECT()), '$.execution_claim_token', '$.execution_claimed_at'), '$.external_provider_terminal_pending', false, '$.external_outcome_reconciliation_required', false, '$.retell_terminal_callback', CAST(${serializedCallback} AS JSON))`;
+  const result = await db
+    .update(taskQueue)
+    .set({
+      status: nextStatus,
+      resultSummary: resultSummary.slice(0, 4_000),
+      completedAt:
+        nextStatus === "completed" || nextStatus === "failed" ? now : null,
+      metadata,
+    })
+    .where(
+      and(
+        eq(taskQueue.id, taskId),
+        eq(taskQueue.status, "in_progress"),
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${taskQueue.metadata}, '$.external_provider_receipt.provider')) = 'retell'`,
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${taskQueue.metadata}, '$.external_provider_receipt.receiptId')) = ${receiptId}`,
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${taskQueue.metadata}, '$.external_provider_terminal_pending')) = 'true'`
+      )
+    );
+  const driverResult = (result as any)?.[0] ?? result;
+  return Number(driverResult?.affectedRows ?? driverResult?.rowsAffected ?? 0) ===
+    1
+    ? { outcome: "updated", status: nextStatus }
+    : { outcome: "stale" };
+}
+
 export async function createTask(task: InsertTask) {
   const db = await getDb();
   if (!db) return null;
@@ -925,6 +1108,46 @@ export async function logExecution(entry: InsertExecutionLogEntry) {
   return db.insert(executionLog).values(entry);
 }
 
+type LogExecutionOnceDatabase = Pick<
+  NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  "transaction"
+>;
+
+/**
+ * Atomically records one audit receipt for a provider event. A crash and
+ * replay cannot duplicate the receipt because the idempotency claim and log
+ * insert share the same transaction.
+ */
+export async function logExecutionOnce(
+  idempotencyKey: string,
+  entry: InsertExecutionLogEntry,
+  databaseOverride?: LogExecutionOnceDatabase
+): Promise<boolean> {
+  const normalizedKey = idempotencyKey.trim();
+  if (!normalizedKey || normalizedKey.length > 1_024) {
+    throw new Error("Execution idempotency key is invalid");
+  }
+  const db = databaseOverride ?? (await getDb());
+  if (!db) throw new Error("Database is not available");
+  const digest = createHash("sha256")
+    .update(normalizedKey, "utf8")
+    .digest("hex");
+  return db.transaction(async tx => {
+    try {
+      await tx.insert(systemConfig).values({
+        key: `execution_once_${digest}`,
+        value: new Date().toISOString(),
+        description: "Atomic execution-log idempotency claim",
+      });
+    } catch (error) {
+      if (isMysqlDuplicateKeyError(error)) return false;
+      throw error;
+    }
+    await tx.insert(executionLog).values(entry);
+    return true;
+  });
+}
+
 export async function getRecentExecutions(limit = 100) {
   const db = await getDb();
   if (!db) return [];
@@ -999,6 +1222,88 @@ export async function setConfig(key: string, value: string, description?: string
   } else {
     await db.insert(systemConfig).values({ key, value, description });
   }
+}
+
+type AtomicConfigDatabase = Pick<
+  NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  "transaction"
+>;
+
+/** Apply a related runtime-gate configuration change as one database commit. */
+export async function setConfigsAtomically(
+  entries: Array<{ key: string; value: string; description?: string }>,
+  databaseOverride?: AtomicConfigDatabase
+): Promise<void> {
+  if (
+    entries.length < 1 ||
+    entries.length > 20 ||
+    entries.some(
+      entry =>
+        !entry.key.trim() ||
+        entry.key.length > 128 ||
+        entry.value.length > 100_000
+    )
+  ) {
+    throw new Error("Atomic configuration batch is invalid");
+  }
+  const db = databaseOverride ?? (await getDb());
+  if (!db) throw new Error("Database is not available");
+  await db.transaction(async tx => {
+    for (const entry of entries) {
+      await tx
+        .insert(systemConfig)
+        .values({
+          key: entry.key,
+          value: entry.value,
+          ...(entry.description ? { description: entry.description } : {}),
+        })
+        .onDuplicateKeyUpdate({
+          set: {
+            value: entry.value,
+            ...(entry.description ? { description: entry.description } : {}),
+          },
+        });
+    }
+  });
+}
+
+/**
+ * Recover the exact outcome of an owner task transition after a worker crash.
+ * This reads the atomic audit written with the task mutation; status alone is
+ * not accepted as proof because another owner surface could have changed it.
+ */
+export async function hasExactOwnerTaskStatusAudit(input: {
+  taskId: number;
+  previousStatus: Task["status"];
+  nextStatus: Task["status"];
+  approvalFingerprint?: string;
+  approvalRequestId?: string;
+}): Promise<boolean> {
+  if (!Number.isSafeInteger(input.taskId) || input.taskId < 1) return false;
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const rows = await db
+    .select({ details: executionLog.details })
+    .from(executionLog)
+    .where(
+      and(
+        eq(executionLog.taskId, input.taskId),
+        eq(executionLog.actionType, "owner_task_status_update")
+      )
+    )
+    .orderBy(desc(executionLog.createdAt), desc(executionLog.id))
+    .limit(25);
+  return rows.some(row => {
+    const details = normalizeTaskMetadata(row.details);
+    return (
+      details.previousStatus === input.previousStatus &&
+      details.nextStatus === input.nextStatus &&
+      (input.approvalFingerprint === undefined ||
+        details.approvalFingerprint === input.approvalFingerprint) &&
+      (input.approvalRequestId === undefined ||
+        details.approvalRequestId === input.approvalRequestId)
+    );
+  });
 }
 
 export type InboundSmsLease =
@@ -1211,7 +1516,12 @@ export async function claimPrivateOwnerAccessToken(
  * so process-local timers alone cannot prevent a duplicate cycle.
  */
 export async function claimPrivateCandidateJobSlot(
-  job: "task-generator" | "task-executor" | "evaluator" | "self-improver",
+  job:
+    | "task-generator"
+    | "task-executor"
+    | "evaluator"
+    | "self-improver"
+    | "retell-reconciler",
   slot: string
 ): Promise<boolean> {
   if (!/^\d{4}-\d{2}-\d{2}(?:T\d{2}(?::\d{2})?)?$/.test(slot)) {

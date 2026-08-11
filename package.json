@@ -73,7 +73,7 @@
     "lucide-react": "^0.453.0",
     "mem0ai": "^3.1.2",
     "mysql2": "^3.15.0",
-    "nanoid": "^5.1.5",
+    "nanoid": "^5.1.16",
     "next-themes": "^0.4.6",
     "openai": "^6.49.0",
     "react": "^19.2.1",
@@ -128,11 +128,11 @@
       "lodash": "4.18.1",
       "lodash-es": "4.18.1",
       "path-to-regexp": "0.1.13",
-      "dompurify": "3.4.12",
+      "dompurify": "3.4.13",
       "mdast-util-to-hast": "13.2.1",
       "qs": "6.15.2",
       "uuid": "11.1.1",
-      "mermaid": "11.15.0",
+      "mermaid": "11.16.1",
       "body-parser": "1.20.6"
     }
   }

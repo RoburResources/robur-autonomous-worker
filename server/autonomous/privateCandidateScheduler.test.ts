@@ -6,6 +6,7 @@ const schedulerMocks = vi.hoisted(() => ({
   runTaskExecutor: vi.fn(),
   runTaskGenerator: vi.fn(),
   getLegacyWorkerRuntimeGate: vi.fn(),
+  getServiceReadiness: vi.fn(),
   claimPrivateCandidateJobSlot: vi.fn(),
   logExecution: vi.fn(),
 }));
@@ -25,6 +26,9 @@ vi.mock("./taskGenerator", () => ({
 vi.mock("../safety/legacyWorkerGate", () => ({
   getLegacyWorkerRuntimeGate: schedulerMocks.getLegacyWorkerRuntimeGate,
 }));
+vi.mock("../_core/readiness", () => ({
+  getServiceReadiness: schedulerMocks.getServiceReadiness,
+}));
 vi.mock("../db", () => ({
   claimPrivateCandidateJobSlot: schedulerMocks.claimPrivateCandidateJobSlot,
   logExecution: schedulerMocks.logExecution,
@@ -42,6 +46,10 @@ describe("private candidate scheduler", () => {
     vi.stubEnv("PRIVATE_CANDIDATE_INTERNAL_AUTONOMY", "true");
     schedulerMocks.getLegacyWorkerRuntimeGate.mockResolvedValue({
       allowed: true,
+    });
+    schedulerMocks.getServiceReadiness.mockResolvedValue({
+      ready: true,
+      databaseSchema: "ready",
     });
     schedulerMocks.claimPrivateCandidateJobSlot.mockResolvedValue(true);
     schedulerMocks.logExecution.mockResolvedValue(undefined);
@@ -99,6 +107,25 @@ describe("private candidate scheduler", () => {
       })
     );
   });
+
+  it.each([
+    ["migration_required", "2026-08-11T12:15:00.000Z"],
+    ["database_unavailable", "2026-08-11T12:30:00.000Z"],
+  ])(
+    "does not execute internal autonomy while service readiness is %s",
+    async (databaseSchema, now) => {
+      schedulerMocks.getServiceReadiness.mockResolvedValue({
+        ready: false,
+        databaseSchema,
+      });
+
+      await runPrivateCandidateSchedulerTick(new Date(now));
+
+      expect(schedulerMocks.claimPrivateCandidateJobSlot).not.toHaveBeenCalled();
+      expect(schedulerMocks.runTaskExecutor).not.toHaveBeenCalled();
+      expect(schedulerMocks.logExecution).not.toHaveBeenCalled();
+    }
+  );
 
   it("records a blocked executor cycle as partial instead of success", async () => {
     schedulerMocks.runTaskExecutor.mockResolvedValue({

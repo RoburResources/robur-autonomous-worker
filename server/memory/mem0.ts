@@ -17,6 +17,7 @@ import { getDb } from "../db";
 import { systemConfig } from "../../drizzle/schema";
 import { eq, like } from "drizzle-orm";
 import { invokeLLM } from "../_core/llm";
+import { createHash } from "node:crypto";
 
 const MEM0_API_KEY = process.env.MEM0_API_KEY;
 const MEM0_BASE_URL = "https://api.mem0.ai";
@@ -31,6 +32,7 @@ export interface MemoryEntry {
   metadata?: Record<string, unknown>;
   score?: number; // relevance score from search
   createdAt?: string;
+  idempotencyKey?: string;
 }
 
 export type MemoryCategory =
@@ -77,7 +79,9 @@ async function localMemoryAdd(entry: MemoryEntry): Promise<string> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const id = `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = entry.idempotencyKey
+    ? `mem_${createHash("sha256").update(entry.idempotencyKey).digest("hex").slice(0, 32)}`
+    : `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const key = `memory:${entry.category}:${id}`;
   const val = JSON.stringify({
     id,
@@ -172,6 +176,9 @@ async function localMemorySearch(
  * falls back to local DB-backed storage.
  */
 export async function addMemory(entry: MemoryEntry): Promise<string> {
+  if (entry.idempotencyKey) {
+    return localMemoryAdd(entry);
+  }
   try {
     if (MEM0_API_KEY) {
       const result = (await mem0ApiRequest("POST", "/v3/memories/add/", {
@@ -293,8 +300,17 @@ export async function storeContactInteraction(params: {
   outcome: "connected" | "no_answer" | "rejected" | "interested" | "not_interested";
   notes?: string;
   bestContactTime?: string;
+  idempotencyKey?: string;
 }): Promise<void> {
-  const { contactName, contactType, channel, outcome, notes, bestContactTime } = params;
+  const {
+    contactName,
+    contactType,
+    channel,
+    outcome,
+    notes,
+    bestContactTime,
+    idempotencyKey,
+  } = params;
 
   const content = `${contactType} "${contactName}" contacted via ${channel}: ${outcome}.${notes ? ` Notes: ${notes}` : ""}${bestContactTime ? ` Best contact time: ${bestContactTime}.` : ""}`;
 
@@ -303,6 +319,7 @@ export async function storeContactInteraction(params: {
     category: "contact_history",
     entityId: contactName.toLowerCase().replace(/\s+/g, "_"),
     metadata: { contactName, contactType, channel, outcome, bestContactTime },
+    idempotencyKey,
   });
 
   // Also store as supplier preference if we learned something
@@ -312,6 +329,9 @@ export async function storeContactInteraction(params: {
       category: "supplier_preferences",
       entityId: contactName.toLowerCase().replace(/\s+/g, "_"),
       metadata: { contactName, preferredChannel: channel, bestContactTime },
+      idempotencyKey: idempotencyKey
+        ? `${idempotencyKey}:preference`
+        : undefined,
     });
   }
 }

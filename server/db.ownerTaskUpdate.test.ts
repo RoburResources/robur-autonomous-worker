@@ -232,8 +232,13 @@ describe("atomic owner task update", () => {
     expect(harness.audit).toHaveLength(0);
   });
 
-  it("does not let an owner change an externally executing task behind its active claim", async () => {
-    const harness = transactionHarness("in_progress");
+  it("does not let an owner cancel an external task after durable dispatch starts", async () => {
+    const harness = transactionHarness("in_progress", {
+      execution_claim_token: "active-execution-token",
+      external_dispatch_id: "22222222-2222-4222-8222-222222222222",
+      external_dispatch_provider: "twilio",
+      external_dispatch_started_at: "2026-07-30T03:59:00.000Z",
+    });
 
     const result = await updateTaskByOwnerWithAudit(
       9,
@@ -719,6 +724,17 @@ describe("atomic external-outcome reconciliation", () => {
       external_outcome_reconciliation_required: true,
       external_outcome_reconciliation_at: reconciliationAt,
       external_outcome_reconciliation_id: reconciliationId,
+      execution_claim_token: "completed-execution-token",
+      execution_claimed_at: "2026-07-30T03:58:00.000Z",
+      external_dispatch_id: "33333333-3333-4333-8333-333333333333",
+      external_dispatch_provider: "twilio",
+      external_dispatch_started_at: "2026-07-30T03:59:00.000Z",
+      external_dispatch_artifact_fingerprint: "f".repeat(64),
+      external_dispatch_approval_request_id: approvalRequestId,
+      external_provider_receipt: {
+        provider: "twilio",
+        receiptId: "SM00000000000000000000000000000000",
+      },
     });
 
     const result = await reconcileExternalOutcomeByOwner(
@@ -741,6 +757,26 @@ describe("atomic external-outcome reconciliation", () => {
     expect(harness.task.metadata).not.toHaveProperty(
       "external_outcome_reconciliation_required"
     );
+    expect(harness.task.metadata).not.toHaveProperty("execution_claim_token");
+    expect(harness.task.metadata).not.toHaveProperty("external_dispatch_id");
+    expect(harness.task.metadata).not.toHaveProperty(
+      "external_provider_receipt"
+    );
+    expect(
+      harness.task.metadata.external_outcome_reconciliation
+    ).toMatchObject({
+      resolution: "confirmed_not_performed",
+      providerReceipt: {
+        provider: "twilio",
+        receiptId: "SM00000000000000000000000000000000",
+      },
+      dispatch: {
+        id: "33333333-3333-4333-8333-333333333333",
+        provider: "twilio",
+        startedAt: "2026-07-30T03:59:00.000Z",
+        approvalRequestId,
+      },
+    });
     expect(harness.audit.map(entry => entry.actionType)).toEqual([
       "owner_external_outcome_reconciliation",
       "external_contact_approval_request",
@@ -757,6 +793,10 @@ describe("atomic external-outcome reconciliation", () => {
       throw new Error("Expected a fresh approval request ID");
     }
     const newApprovalRequestId = result.approvalRequestId;
+    expect(newApprovalRequestId).not.toBe(approvalRequestId);
+    expect(harness.task.metadata.external_approval_request_id).toBe(
+      newApprovalRequestId
+    );
     const staleReplay = await updateTaskByOwnerWithAudit(
       9,
       {

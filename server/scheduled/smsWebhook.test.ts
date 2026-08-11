@@ -4,296 +4,184 @@ import type { Request, Response } from "express";
 const twilioMocks = vi.hoisted(() => ({
   isVerifiedOwnerSmsRequest: vi.fn(),
   parseInboundSMS: vi.fn(),
-  sendSMS: vi.fn(),
 }));
-const dbMocks = vi.hoisted(() => ({
-  acquireInboundSms: vi.fn(),
-  completeInboundSms: vi.fn(),
-  getConfig: vi.fn(),
-  getTaskById: vi.fn(),
-  updateTask: vi.fn(),
-  updateTaskByOwnerWithAudit: vi.fn(),
-  logExecution: vi.fn(),
+const inboxMocks = vi.hoisted(() => ({
+  enqueueInboundSms: vi.fn(),
+  drainInboundSmsInbox: vi.fn(),
 }));
-const gateMocks = vi.hoisted(() => ({
-  getLegacyWorkerRuntimeGate: vi.fn(),
-  pauseLegacyWorker: vi.fn(),
-  resumeLegacyWorkerByVerifiedOwner: vi.fn(),
-}));
-const conversationMocks = vi.hoisted(() => ({
-  handleConversationalSMS: vi.fn(),
+const channelMocks = vi.hoisted(() => ({
+  ownerSmsChannelCertified: vi.fn(),
 }));
 
 vi.mock("../integrations/twilio", () => twilioMocks);
-vi.mock("../db", () => dbMocks);
-vi.mock("../safety/legacyWorkerGate", () => gateMocks);
-vi.mock("./smsConversation", () => conversationMocks);
+vi.mock("../safety/smsChannelCertification", () => channelMocks);
+vi.mock("./smsWebhookInbox", async importOriginal => {
+  const actual = await importOriginal<
+    typeof import("./smsWebhookInbox")
+  >();
+  return {
+    ...actual,
+    enqueueInboundSms: inboxMocks.enqueueInboundSms,
+    drainInboundSmsInbox: inboxMocks.drainInboundSmsInbox,
+  };
+});
 
 import { smsWebhookHandler } from "./smsWebhook";
 
-function responseMock(): Response {
+function responseMock(events: string[] = []): Response {
   const res = {
-    status: vi.fn(),
-    send: vi.fn(),
+    type: vi.fn(() => {
+      events.push("content-type");
+      return res;
+    }),
+    status: vi.fn((status: number) => {
+      events.push(`status:${status}`);
+      return res;
+    }),
+    send: vi.fn(() => {
+      events.push("ack");
+      return res;
+    }),
   };
-  res.status.mockReturnValue(res);
-  res.send.mockReturnValue(res);
   return res as unknown as Response;
 }
 
-describe("signed owner SMS controls", () => {
-  const approvalFingerprint = "a".repeat(64);
-  const approvalRequestId = "11111111-1111-4111-8111-111111111111";
+function validPayload(message = "STATUS") {
+  return {
+    accountSid: `AC${"a".repeat(32)}`,
+    from: "+61400000000",
+    to: "+61411111111",
+    message,
+    messageSid: `SM${"0".repeat(32)}`,
+  };
+}
 
+describe("durable signed owner SMS ingress", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.OWNER_SMS_COMMAND_CHANNEL_CERTIFIED = "true";
-    twilioMocks.parseInboundSMS.mockReturnValue({
-      from: "+61400000000",
-      message: "START",
-      messageSid: "SM00000000000000000000000000000000",
+    channelMocks.ownerSmsChannelCertified.mockReturnValue(true);
+    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
+    twilioMocks.parseInboundSMS.mockReturnValue(validPayload());
+    inboxMocks.enqueueInboundSms.mockResolvedValue({
+      disposition: "accepted",
+      key: "a".repeat(64),
+      created: true,
     });
-    dbMocks.acquireInboundSms.mockResolvedValue({
-      disposition: "acquired",
-      token: "22222222-2222-4222-8222-222222222222",
-      leaseUntil: "2026-07-30T00:10:00.000Z",
-    });
-    dbMocks.completeInboundSms.mockResolvedValue(true);
-    dbMocks.updateTaskByOwnerWithAudit.mockResolvedValue({
-      outcome: "updated",
-      previousStatus: "awaiting_approval",
-      nextStatus: "pending",
-      statusChanged: true,
-    });
-    gateMocks.getLegacyWorkerRuntimeGate.mockResolvedValue({ allowed: true });
+    inboxMocks.drainInboundSmsInbox.mockResolvedValue(1);
   });
 
-  it("keeps the owner SMS command channel disabled until separately certified", async () => {
-    delete process.env.OWNER_SMS_COMMAND_CHANNEL_CERTIFIED;
+  it("stays default-off and returns valid XML without touching authentication", async () => {
+    channelMocks.ownerSmsChannelCertified.mockReturnValue(false);
     const res = responseMock();
 
     await smsWebhookHandler({ body: {} } as Request, res);
 
+    expect(res.type).toHaveBeenCalledWith("text/xml");
     expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.send).toHaveBeenCalledWith("<Response></Response>");
     expect(twilioMocks.isVerifiedOwnerSmsRequest).not.toHaveBeenCalled();
   });
 
-  it("never resumes or sends a reply for an unauthenticated START", async () => {
+  it("rejects an unauthenticated request before parsing or persistence", async () => {
     twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(false);
     const res = responseMock();
 
     await smsWebhookHandler({ body: {} } as Request, res);
 
     expect(res.status).toHaveBeenCalledWith(403);
-    expect(gateMocks.resumeLegacyWorkerByVerifiedOwner).not.toHaveBeenCalled();
-    expect(dbMocks.updateTask).not.toHaveBeenCalled();
-    expect(twilioMocks.sendSMS).not.toHaveBeenCalled();
+    expect(twilioMocks.parseInboundSMS).not.toHaveBeenCalled();
+    expect(inboxMocks.enqueueInboundSms).not.toHaveBeenCalled();
   });
 
-  it("resumes only after the signed owner request has been verified", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
+  it("rejects a malformed SID or oversized body before persistence", async () => {
+    twilioMocks.parseInboundSMS.mockReturnValue({
+      ...validPayload("x".repeat(1_601)),
+      messageSid: "invalid",
+    });
     const res = responseMock();
 
     await smsWebhookHandler({ body: {} } as Request, res);
 
-    expect(gateMocks.resumeLegacyWorkerByVerifiedOwner).toHaveBeenCalledWith(
-      "sms:+61400000000"
-    );
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(inboxMocks.enqueueInboundSms).not.toHaveBeenCalled();
+  });
+
+  it("persists before acknowledging and starts only the internal worker after ack", async () => {
+    const events: string[] = [];
+    inboxMocks.enqueueInboundSms.mockImplementation(async () => {
+      events.push("persisted");
+      return {
+        disposition: "accepted",
+        key: "a".repeat(64),
+        created: true,
+      };
+    });
+    inboxMocks.drainInboundSmsInbox.mockImplementation(async () => {
+      events.push("drain");
+      return 1;
+    });
+    const res = responseMock(events);
+
+    await smsWebhookHandler({ body: {} } as Request, res);
+    await Promise.resolve();
+
+    expect(events.indexOf("persisted")).toBeLessThan(events.indexOf("ack"));
+    expect(events.indexOf("ack")).toBeLessThan(events.indexOf("drain"));
     expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.type).toHaveBeenCalledWith("text/xml");
   });
 
-  it("does not approve an ambiguous latest task", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
-    twilioMocks.parseInboundSMS.mockReturnValue({
-      from: "+61400000000",
-      message: "APPROVE",
-      messageSid: "SM00000000000000000000000000000001",
-    });
+  it("passes only the bounded authenticated identity to the inbox", async () => {
+    const payload = validPayload("START");
+    twilioMocks.parseInboundSMS.mockReturnValue(payload);
 
     await smsWebhookHandler({ body: {} } as Request, responseMock());
 
-    expect(dbMocks.getTaskById).not.toHaveBeenCalled();
-    expect(dbMocks.updateTask).not.toHaveBeenCalled();
-  });
-
-  it("binds approval to the exact awaiting task ID", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
-    twilioMocks.parseInboundSMS.mockReturnValue({
-      from: "+61400000000",
-      message: `APPROVE 42 ${approvalFingerprint} ${approvalRequestId}`,
-      messageSid: "SM00000000000000000000000000000002",
-    });
-    dbMocks.getTaskById.mockResolvedValue({
-      id: 42,
-      status: "awaiting_approval",
-      description: "A specifically identified task",
-      actionType: "send_sms",
-    });
-
-    await smsWebhookHandler({ body: {} } as Request, responseMock());
-
-    expect(dbMocks.getTaskById).toHaveBeenCalledWith(42);
-    expect(dbMocks.updateTaskByOwnerWithAudit).toHaveBeenCalledWith(42, {
-      status: "pending",
-      expectedStatus: "awaiting_approval",
-      approvalFingerprint,
-      approvalRequestId,
-      approvalSource: "verified_sms",
-    });
-    expect(dbMocks.updateTask).not.toHaveBeenCalled();
-  });
-
-  it("does not approve an external artifact without the exact message token", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
-    twilioMocks.parseInboundSMS.mockReturnValue({
-      from: "+61400000000",
-      message: "APPROVE 42",
-      messageSid: "SM00000000000000000000000000000022",
-    });
-    dbMocks.getTaskById.mockResolvedValue({
-      id: 42,
-      status: "awaiting_approval",
-      description: "A specifically identified external task",
-      actionType: "send_sms",
-    });
-
-    await smsWebhookHandler({ body: {} } as Request, responseMock());
-
-    expect(dbMocks.updateTaskByOwnerWithAudit).not.toHaveBeenCalled();
-    expect(twilioMocks.sendSMS).toHaveBeenCalledWith(
-      "+61400000000",
-      expect.stringContaining("exact approval token")
+    expect(inboxMocks.enqueueInboundSms).toHaveBeenCalledWith(
+      payload,
+      expect.stringMatching(/^[a-f0-9]{64}$/)
     );
   });
 
-  it("keeps a substituted task paused when the shown approval fingerprint is stale", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
-    twilioMocks.parseInboundSMS.mockReturnValue({
-      from: "+61400000000",
-      message: `APPROVE 42 ${approvalFingerprint} ${approvalRequestId}`,
-      messageSid: "SM00000000000000000000000000000003",
-    });
-    dbMocks.getTaskById.mockResolvedValue({
-      id: 42,
-      status: "awaiting_approval",
-      description: "A changed task",
-      actionType: "send_sms",
-    });
-    dbMocks.updateTaskByOwnerWithAudit.mockResolvedValue({
-      outcome: "approval_stale",
-      previousStatus: "awaiting_approval",
-      nextStatus: "pending",
-    });
+  it.each(["completed", "terminal_failure"] as const)(
+    "acknowledges a safely terminal %s replay without reprocessing",
+    async disposition => {
+      inboxMocks.enqueueInboundSms.mockResolvedValue({
+        disposition,
+        key: "a".repeat(64),
+      });
+      const res = responseMock();
 
-    await smsWebhookHandler({ body: {} } as Request, responseMock());
+      await smsWebhookHandler({ body: {} } as Request, res);
 
-    expect(dbMocks.updateTaskByOwnerWithAudit).toHaveBeenCalledWith(42, {
-      status: "pending",
-      expectedStatus: "awaiting_approval",
-      approvalFingerprint,
-      approvalRequestId,
-      approvalSource: "verified_sms",
-    });
-    expect(twilioMocks.sendSMS).toHaveBeenCalledWith(
-      "+61400000000",
-      expect.stringContaining("changed after approval was requested")
-    );
-    expect(twilioMocks.sendSMS).not.toHaveBeenCalledWith(
-      "+61400000000",
-      expect.stringContaining("approved")
-    );
-  });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(inboxMocks.drainInboundSmsInbox).not.toHaveBeenCalled();
+    }
+  );
 
-  it("ignores a replayed signed owner command", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
-    dbMocks.acquireInboundSms.mockResolvedValue({
-      disposition: "completed",
-    });
-
-    await smsWebhookHandler({ body: {} } as Request, responseMock());
-
-    expect(gateMocks.resumeLegacyWorkerByVerifiedOwner).not.toHaveBeenCalled();
-    expect(dbMocks.updateTask).not.toHaveBeenCalled();
-    expect(twilioMocks.sendSMS).not.toHaveBeenCalled();
-  });
-
-  it("reinforces STOP and asks Twilio to retry while another lease is processing", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
-    twilioMocks.parseInboundSMS.mockReturnValue({
-      from: "+61400000000",
-      message: "STOP",
-      messageSid: "SM00000000000000000000000000000005",
-    });
-    dbMocks.acquireInboundSms.mockResolvedValue({
-      disposition: "processing",
+  it("quarantines a same-SID changed-payload replay", async () => {
+    inboxMocks.enqueueInboundSms.mockResolvedValue({
+      disposition: "conflict",
+      key: "a".repeat(64),
     });
     const res = responseMock();
 
     await smsWebhookHandler({ body: {} } as Request, res);
 
-    expect(gateMocks.pauseLegacyWorker).toHaveBeenCalledWith(
-      "Paused by verified owner via signed SMS retry"
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(inboxMocks.drainInboundSmsInbox).not.toHaveBeenCalled();
+  });
+
+  it("returns retryable XML when durable persistence fails", async () => {
+    inboxMocks.enqueueInboundSms.mockRejectedValue(
+      new Error("database unavailable")
     );
-    expect(dbMocks.completeInboundSms).not.toHaveBeenCalled();
+    const res = responseMock();
+
+    await smsWebhookHandler({ body: {} } as Request, res);
+
+    expect(res.type).toHaveBeenCalledWith("text/xml");
     expect(res.status).toHaveBeenCalledWith(503);
-  });
-
-  it("does not acknowledge STOP when its exact completion fence is lost", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
-    twilioMocks.parseInboundSMS.mockReturnValue({
-      from: "+61400000000",
-      message: "STOP",
-      messageSid: "SM00000000000000000000000000000006",
-    });
-    dbMocks.completeInboundSms.mockResolvedValue(false);
-    const res = responseMock();
-
-    await smsWebhookHandler({ body: {} } as Request, res);
-
-    expect(gateMocks.pauseLegacyWorker).toHaveBeenCalledWith(
-      "Paused by verified owner via signed SMS"
-    );
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(twilioMocks.sendSMS).not.toHaveBeenCalled();
-  });
-
-  it("does not dispatch free text while the runtime gate is paused", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
-    twilioMocks.parseInboundSMS.mockReturnValue({
-      from: "+61400000000",
-      message: "Research the current market",
-      messageSid: "SM00000000000000000000000000000004",
-    });
-    gateMocks.getLegacyWorkerRuntimeGate.mockResolvedValue({
-      allowed: false,
-      reason: "paused",
-    });
-
-    await smsWebhookHandler({ body: {} } as Request, responseMock());
-
-    expect(conversationMocks.handleConversationalSMS).not.toHaveBeenCalled();
-    expect(twilioMocks.sendSMS).not.toHaveBeenCalled();
-  });
-
-  it("awaits idempotent conversational processing before completing the delivery lease", async () => {
-    twilioMocks.isVerifiedOwnerSmsRequest.mockReturnValue(true);
-    twilioMocks.parseInboundSMS.mockReturnValue({
-      from: "+61400000000",
-      message: "Research the current market",
-      messageSid: "SM00000000000000000000000000000007",
-    });
-    conversationMocks.handleConversationalSMS.mockResolvedValue(undefined);
-
-    await smsWebhookHandler({ body: {} } as Request, responseMock());
-
-    expect(conversationMocks.handleConversationalSMS).toHaveBeenCalledWith(
-      "Research the current market",
-      "+61400000000",
-      "twilio:SM00000000000000000000000000000007"
-    );
-    expect(dbMocks.completeInboundSms).toHaveBeenCalledWith(
-      "SM00000000000000000000000000000007",
-      "22222222-2222-4222-8222-222222222222"
-    );
+    expect(res.send).toHaveBeenCalledWith("<Response></Response>");
   });
 });

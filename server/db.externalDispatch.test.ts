@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import {
   beginClaimedExternalDispatch,
   persistClaimedExternalProviderReceipt,
@@ -13,6 +14,12 @@ function updateHarness(affectedRows: number) {
   const set = vi.fn(() => ({ where }));
   const update = vi.fn(() => ({ set }));
   return { database: { update }, update, set, where };
+}
+
+function renderSql(value: unknown) {
+  return new MySqlDialect().sqlToQuery(
+    value as Parameters<MySqlDialect["sqlToQuery"]>[0]
+  );
 }
 
 describe("claimed external provider dispatch fencing", () => {
@@ -38,6 +45,33 @@ describe("claimed external provider dispatch fencing", () => {
     expect(harness.update).toHaveBeenCalledTimes(1);
     expect(harness.set).toHaveBeenCalledTimes(1);
     expect(harness.where).toHaveBeenCalledTimes(1);
+
+    const markerWrite = renderSql(
+      (harness.set.mock.calls[0][0] as { metadata: unknown }).metadata
+    );
+    const dispatchFence = renderSql(harness.where.mock.calls[0][0]);
+    expect(markerWrite.sql.toLowerCase()).toContain("json_set(coalesce(");
+    expect(markerWrite.sql).toContain("$.external_dispatch_id");
+    expect(markerWrite.params).toEqual(
+      expect.arrayContaining(["twilio", fingerprint, approvalRequestId])
+    );
+    expect(dispatchFence.sql).toContain("$.execution_claim_token");
+    expect(dispatchFence.sql).toContain("$.external_approval_fingerprint");
+    expect(dispatchFence.sql).toContain("$.external_approval_request_id");
+    expect(dispatchFence.sql).toContain("$.external_dispatch_id");
+    expect(dispatchFence.sql).toContain("$.external_provider_receipt");
+    expect(dispatchFence.sql).toContain(
+      "$.external_outcome_reconciliation_required"
+    );
+    expect(dispatchFence.params).toEqual(
+      expect.arrayContaining([
+        42,
+        "in_progress",
+        "execution-token",
+        fingerprint,
+        approvalRequestId,
+      ])
+    );
   });
 
   it("returns null when the atomic dispatch fence affects no row", async () => {
@@ -93,6 +127,35 @@ describe("claimed external provider dispatch fencing", () => {
     expect(harness.update).toHaveBeenCalledTimes(1);
     expect(harness.set).toHaveBeenCalledTimes(1);
     expect(harness.where).toHaveBeenCalledTimes(1);
+
+    const receiptWrite = renderSql(
+      (harness.set.mock.calls[0][0] as { metadata: unknown }).metadata
+    );
+    const receiptFence = renderSql(harness.where.mock.calls[0][0]);
+    expect(receiptWrite.sql.toLowerCase()).toContain("json_set(coalesce(");
+    expect(receiptWrite.sql.toLowerCase()).not.toContain("json_remove");
+    expect(receiptWrite.sql).toContain("$.external_provider_receipt");
+    expect(receiptWrite.params).toContain(JSON.stringify(receipt));
+    expect(receiptFence.sql).toContain("$.execution_claim_token");
+    expect(receiptFence.sql).toContain("$.external_dispatch_id");
+    expect(receiptFence.sql).toContain("$.external_dispatch_provider");
+    expect(receiptFence.sql).toContain(
+      "$.external_dispatch_artifact_fingerprint"
+    );
+    expect(receiptFence.sql).toContain(
+      "$.external_dispatch_approval_request_id"
+    );
+    expect(receiptFence.params).toEqual(
+      expect.arrayContaining([
+        42,
+        "in_progress",
+        "execution-token",
+        dispatchId,
+        receipt.provider,
+        fingerprint,
+        approvalRequestId,
+      ])
+    );
   });
 
   it("reports a lost receipt fence without retrying or writing again", async () => {

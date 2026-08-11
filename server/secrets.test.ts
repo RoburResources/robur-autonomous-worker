@@ -9,25 +9,27 @@ import { validateTwilioWebhook } from "./integrations/twilio";
 describe("secret-safe configuration", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("enables autonomy by default (gate disabled)", () => {
+  it("retires autonomy by default", () => {
     expect(getLegacyWorkerEnvironmentGate({})).toMatchObject({
-      allowed: true,
+      allowed: false,
     });
   });
 
-  it("enables autonomy regardless of provider credentials", () => {
+  it("does not accept provider credentials as an autonomy opt-in", () => {
     expect(
       getLegacyWorkerEnvironmentGate({
         RETELL_API_KEY: "test-only-placeholder",
         TWILIO_AUTH_TOKEN: "test-only-placeholder",
       })
-    ).toMatchObject({ allowed: true });
+    ).toMatchObject({ allowed: false });
   });
 
-  it("enables autonomy regardless of environment variables (gate disabled)", () => {
+  it("requires both exact deployment opt-ins and a verified owner", () => {
     expect(
       getLegacyWorkerEnvironmentGate({
-        LEGACY_WORKER_ENABLED: "false",
+        LEGACY_WORKER_ENABLED: "true",
+        LEGACY_WORKER_RISK_ACK,
+        OWNER_OPEN_ID: "owner-1",
       })
     ).toMatchObject({ allowed: true });
   });

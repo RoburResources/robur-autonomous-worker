@@ -1,29 +1,23 @@
 /**
- * Conversational SMS Handler for Addison
+ * Durable conversational-SMS planning.
  *
- * Handles natural language instructions from Tarz via SMS.
- * Parses free-text messages using LLM, creates tasks, and replies with confirmation.
- *
- * Supported patterns:
- *   - Any free-text instruction → LLM parses intent, creates task(s), replies with summary
- *   - "TASKS" → list top 5 pending tasks
- *   - "DONE" → list last 5 completed tasks
- *   - "STATUS" → system status (handled by existing webhook)
- *   - "STOP/START/APPROVE/REJECT" → handled by existing webhook
+ * Planning is side-effect free and is persisted by the SMS inbox before any
+ * task is created. Replays apply that exact plan with stable task keys, so an
+ * LLM retry can never create a second, different interpretation.
  */
 
+import { desc, eq } from "drizzle-orm";
+import { z } from "zod";
+import { taskQueue } from "../../drizzle/schema";
 import { invokeLLM } from "../_core/llm";
-import { sendSMS } from "../integrations/twilio";
 import {
-  getConfig,
   createTask,
   createTaskOnce,
+  getConfig,
   getDb,
 } from "../db";
-import { taskQueue } from "../../drizzle/schema";
-import { eq, desc, sql } from "drizzle-orm";
+import { sendSMS } from "../integrations/twilio";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
-import { z } from "zod";
 
 const COMMAND_KEYWORDS = ["STOP", "START", "APPROVE", "REJECT", "STATUS"];
 const CONVERSATIONAL_ACTION_TYPES = [
@@ -33,6 +27,7 @@ const CONVERSATIONAL_ACTION_TYPES = [
   "send_email",
   "send_sms",
 ] as const;
+
 const conversationalActionPayloadSchema = z
   .record(
     z.string().min(1).max(64),
@@ -51,30 +46,44 @@ const conversationalActionPayloadSchema = z
       });
     }
   });
-const conversationalInstructionSchema = z
+
+const conversationalTaskSchema = z
   .object({
-    tasks: z
-      .array(
-        z
-          .object({
-            description: z.string().trim().min(10).max(4_000),
-            actionType: z.enum(CONVERSATIONAL_ACTION_TYPES),
-            priorityScore: z.number().int().min(1).max(100),
-            estimatedValue: z
-              .number()
-              .finite()
-              .min(0)
-              .max(10_000_000)
-              .optional(),
-            actionPayload: conversationalActionPayloadSchema.optional(),
-          })
-          .strict()
-      )
-      .min(1)
-      .max(3),
-    reply: z.string().trim().min(1).max(240),
+    description: z.string().trim().min(10).max(4_000),
+    actionType: z.enum(CONVERSATIONAL_ACTION_TYPES),
+    priorityScore: z.number().int().min(1).max(100),
+    estimatedValue: z
+      .number()
+      .finite()
+      .min(0)
+      .max(10_000_000)
+      .optional(),
+    actionPayload: conversationalActionPayloadSchema.optional(),
   })
   .strict();
+
+export const smsConversationPlanSchema = z
+  .object({
+    version: z.literal(1),
+    kind: z.enum(["reply_only", "task_creation"]),
+    tasks: z.array(conversationalTaskSchema).max(3),
+    reply: z.string().trim().min(1).max(320),
+    fallback: z.boolean(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      (value.kind === "task_creation" && value.tasks.length < 1) ||
+      (value.kind === "reply_only" && value.tasks.length !== 0)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Conversation plan kind does not match its task count",
+      });
+    }
+  });
+
+export type SmsConversationPlan = z.infer<typeof smsConversationPlanSchema>;
 
 class ConversationalRuntimeBlockedError extends Error {}
 
@@ -87,24 +96,6 @@ async function assertConversationalRuntimeAllowed(): Promise<void> {
   }
 }
 
-async function sendConversationalReply(
-  to: string,
-  body: string
-): Promise<void> {
-  await assertConversationalRuntimeAllowed();
-  await sendSMS(to, body);
-}
-
-async function createConversationalTask(
-  task: Parameters<typeof createTask>[0],
-  idempotencyKey?: string
-) {
-  await assertConversationalRuntimeAllowed();
-  return idempotencyKey
-    ? createTaskOnce(idempotencyKey, task)
-    : createTask(task);
-}
-
 function canonicalActionPayload(
   actionType: unknown,
   value: unknown
@@ -113,13 +104,12 @@ function canonicalActionPayload(
   const payload = value as Record<string, unknown>;
   if (actionType !== "send_email") return payload;
 
-  const emailCandidates = [
+  const email = [
     payload.email,
     payload.recipientEmail,
     payload.toEmail,
     payload.to,
-  ];
-  const email = emailCandidates.find(
+  ].find(
     candidate => typeof candidate === "string" && candidate.trim().length > 0
   );
   return {
@@ -130,140 +120,102 @@ function canonicalActionPayload(
   };
 }
 
-/**
- * Returns true if the message is a structured command handled by the existing webhook.
- */
 export function isStructuredCommand(message: string): boolean {
   const upper = message.toUpperCase().trim();
   return COMMAND_KEYWORDS.some(
-    (cmd) => upper === cmd || upper.startsWith(cmd + " ")
+    command => upper === command || upper.startsWith(`${command} `)
   );
 }
 
-/**
- * Handle a natural language SMS from the verified owner.
- * Returns the reply text to send back.
- */
-export async function handleConversationalSMS(
-  message: string,
-  from: string,
-  idempotencyKey?: string
-): Promise<void> {
-  try {
-    await assertConversationalRuntimeAllowed();
-  } catch (error) {
-    if (error instanceof ConversationalRuntimeBlockedError) return;
-    throw error;
+function replyOnly(reply: string): SmsConversationPlan {
+  return smsConversationPlanSchema.parse({
+    version: 1,
+    kind: "reply_only",
+    tasks: [],
+    reply,
+    fallback: false,
+  });
+}
+
+async function listTaskReply(status: "pending" | "completed"): Promise<string> {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const query = db
+    .select({
+      id: taskQueue.id,
+      desc: taskQueue.description,
+      actionType: taskQueue.actionType,
+    })
+    .from(taskQueue)
+    .where(eq(taskQueue.status, status))
+    .orderBy(
+      status === "pending"
+        ? desc(taskQueue.priorityScore)
+        : desc(taskQueue.completedAt)
+    )
+    .limit(5);
+  const tasks = await query;
+  if (tasks.length === 0) {
+    return status === "pending"
+      ? "[Addison] No pending tasks right now - the queue is clear."
+      : "[Addison] Nothing has completed yet.";
   }
-  const upper = message.toUpperCase().trim();
-
-  // TASKS — list pending tasks
-  if (upper === "TASKS" || upper === "QUEUE") {
-    const db = await getDb();
-    if (!db) {
-      await sendConversationalReply(from, "[Addison] Can't reach database right now, try again in a sec.");
-      return;
-    }
-    const tasks = await db
-      .select({ id: taskQueue.id, desc: taskQueue.description, actionType: taskQueue.actionType, score: taskQueue.priorityScore })
-      .from(taskQueue)
-      .where(eq(taskQueue.status, "pending"))
-      .orderBy(desc(taskQueue.priorityScore))
-      .limit(5);
-
-    if (tasks.length === 0) {
-      await sendConversationalReply(from, "[Addison] No pending tasks right now — queue's clear!");
-      return;
-    }
-    const list = tasks.map((t, i) =>
-      `${i + 1}. #${t.id} [${t.actionType}] ${t.desc?.substring(0, 60)}...`
-    ).join("\n");
-    await sendConversationalReply(from, `[Addison] Top ${tasks.length} pending tasks:\n${list}`);
-    return;
-  }
-
-  // DONE — list recent completed tasks
-  if (upper === "DONE" || upper === "COMPLETED") {
-    const db = await getDb();
-    if (!db) {
-      await sendConversationalReply(from, "[Addison] Can't reach database right now.");
-      return;
-    }
-    const tasks = await db
-      .select({ id: taskQueue.id, desc: taskQueue.description, actionType: taskQueue.actionType })
-      .from(taskQueue)
-      .where(eq(taskQueue.status, "completed"))
-      .orderBy(desc(taskQueue.completedAt))
-      .limit(5);
-
-    if (tasks.length === 0) {
-      await sendConversationalReply(from, "[Addison] Nothing completed yet — still working through the queue.");
-      return;
-    }
-    const list = tasks.map((t, i) =>
-      `${i + 1}. #${t.id} [${t.actionType}] ${t.desc?.substring(0, 60)}...`
-    ).join("\n");
-    await sendConversationalReply(from, `[Addison] Last ${tasks.length} completed:\n${list}`);
-    return;
-  }
-
-  // HELP — show available commands
-  if (upper === "HELP" || upper === "?") {
-    await sendConversationalReply(from,
-      "[Addison] Commands:\n" +
-      "TASKS — see pending queue\n" +
-      "DONE — see completed tasks\n" +
-      "STATUS — system status\n" +
-      "STOP / START — kill switch\n" +
-      "APPROVE/REJECT <id> — task approval\n" +
-      "Or just text me an instruction naturally!"
-    );
-    return;
-  }
-
-  // Natural language instruction — parse with LLM and create task(s)
-  await handleNaturalLanguageInstruction(message, from, idempotencyKey);
+  const label =
+    status === "pending" ? "pending tasks" : "recent completed tasks";
+  const list = tasks
+    .map(
+      (task, index) =>
+        `${index + 1}. #${task.id} [${task.actionType || "task"}] ${(task.desc || "").substring(0, 60)}`
+    )
+    .join("\n");
+  return `[Addison] ${label}:\n${list}`.substring(0, 320);
 }
 
 /**
- * Parse a free-text instruction from Tarz and create one or more tasks.
+ * Produce one bounded, deterministic work product. This function performs no
+ * task insert and sends no message.
  */
-async function handleNaturalLanguageInstruction(
-  message: string,
-  from: string,
-  idempotencyKey?: string
-): Promise<void> {
-  const createdIds: number[] = [];
-  let committedTaskCount = 0;
-  try {
-    // Get context for the LLM
-    const constitution = await getConfig("constitution") || "";
-    const userPhone = await getConfig("user_phone") || "+61495007200";
+export async function planConversationalSMS(
+  message: string
+): Promise<SmsConversationPlan> {
+  const normalized = message.trim();
+  if (!normalized || normalized.length > 1_600) {
+    throw new Error("SMS instruction is empty or exceeds 1,600 characters");
+  }
+  const upper = normalized.toUpperCase();
+  if (upper === "TASKS" || upper === "QUEUE") {
+    return replyOnly(await listTaskReply("pending"));
+  }
+  if (upper === "DONE" || upper === "COMPLETED") {
+    return replyOnly(await listTaskReply("completed"));
+  }
+  if (upper === "HELP" || upper === "?") {
+    return replyOnly(
+      "[Addison] Commands: TASKS, DONE, STATUS, STOP, APPROVE <id>, REJECT <id>. Resume only from the authenticated owner dashboard. Or text an instruction naturally."
+    );
+  }
 
+  try {
     await assertConversationalRuntimeAllowed();
+    const constitution = (await getConfig("constitution")) || "";
     const response = await invokeLLM({
       messages: [
         {
           role: "system",
-          content: `You are Addison, the AI executive assistant for Tarz (Michael) at Robur Resources (scrap metal recycling, Perth WA).
-Tarz has sent you an SMS instruction. Parse it and create 1-3 actionable tasks.
+          content: `You are Addison, Michael's private executive assistant at Robur Resources.
+Convert the owner's SMS into 1-3 specific tasks.
 
 CONTEXT:
 ${constitution.substring(0, 500)}
 
-TASK CREATION RULES:
-- Each task must have: description (specific, actionable), actionType (web_research/data_entry/outbound_call/send_email/send_sms), priorityScore (1-100), estimatedValue (AUD revenue/cost impact)
-- For outbound_call tasks, include phoneNumber in actionPayload if mentioned
-- For send_email tasks, include email and subject in actionPayload if mentioned
-- For send_sms tasks, include phoneNumber and message in actionPayload if mentioned
-- Keep descriptions specific and executable
-
-Respond with JSON: { "tasks": [...], "reply": "brief confirmation SMS reply (1-2 sentences, casual Australian tone)" }`
+Allowed actionType values: web_research, data_entry, outbound_call, send_email, send_sms.
+For external actions include only the target fields stated by the owner.
+Return the requested JSON and keep the reply under 240 characters.`,
         },
         {
           role: "user",
-          content: `Tarz's SMS instruction: "${message}"\n\nCreate the appropriate task(s) and draft a brief reply.`
-        }
+          content: `Owner SMS instruction: ${JSON.stringify(normalized)}`,
+        },
       ],
       outputSchema: {
         name: "task_creation",
@@ -277,16 +229,31 @@ Respond with JSON: { "tasks": [...], "reply": "brief confirmation SMS reply (1-2
               items: {
                 type: "object",
                 properties: {
-                  description: { type: "string", minLength: 10, maxLength: 4000 },
-                  actionType: { type: "string", enum: CONVERSATIONAL_ACTION_TYPES },
-                  priorityScore: { type: "integer", minimum: 1, maximum: 100 },
-                  estimatedValue: { type: "number", minimum: 0, maximum: 10000000 },
+                  description: {
+                    type: "string",
+                    minLength: 10,
+                    maxLength: 4_000,
+                  },
+                  actionType: {
+                    type: "string",
+                    enum: CONVERSATIONAL_ACTION_TYPES,
+                  },
+                  priorityScore: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 100,
+                  },
+                  estimatedValue: {
+                    type: "number",
+                    minimum: 0,
+                    maximum: 10_000_000,
+                  },
                   actionPayload: {
                     type: "object",
                     maxProperties: 10,
                     additionalProperties: {
                       anyOf: [
-                        { type: "string", maxLength: 4000 },
+                        { type: "string", maxLength: 4_000 },
                         { type: "number" },
                         { type: "boolean" },
                         { type: "null" },
@@ -296,91 +263,126 @@ Respond with JSON: { "tasks": [...], "reply": "brief confirmation SMS reply (1-2
                 },
                 required: ["description", "actionType", "priorityScore"],
                 additionalProperties: false,
-              }
+              },
             },
-            reply: { type: "string", minLength: 1, maxLength: 240 }
+            reply: { type: "string", minLength: 1, maxLength: 240 },
           },
           required: ["tasks", "reply"],
           additionalProperties: false,
-        }
-      }
+        },
+      },
     });
-
     const content = response.choices?.[0]?.message?.content;
     if (!content) throw new Error("No LLM response");
-
-    const parsed = conversationalInstructionSchema.parse(
-      typeof content === "string" ? JSON.parse(content) : content
-    );
-    const { tasks, reply } = parsed;
-
-    // Create each task
-    for (let index = 0; index < (tasks || []).length; index += 1) {
-      const t = tasks[index];
-      const result = await createConversationalTask({
-        description: t.description,
-        actionType: t.actionType,
-        priorityScore: t.priorityScore,
-        estimatedValue: t.estimatedValue?.toString(),
-        actionPayload: canonicalActionPayload(t.actionType, t.actionPayload),
-        source: "sms_instruction",
-        metadata: {
-          instructed_by: "tarz_sms",
-          original_message: message.substring(0, 200),
-          created_at: new Date().toISOString(),
+    const parsed =
+      typeof content === "string" ? JSON.parse(content) : content;
+    return smsConversationPlanSchema.parse({
+      version: 1,
+      kind: "task_creation",
+      tasks: parsed.tasks,
+      reply: parsed.reply,
+      fallback: false,
+    });
+  } catch (error) {
+    if (error instanceof ConversationalRuntimeBlockedError) throw error;
+    return smsConversationPlanSchema.parse({
+      version: 1,
+      kind: "task_creation",
+      tasks: [
+        {
+          description: `[From Tarz SMS] ${normalized}`,
+          actionType: "web_research",
+          priorityScore: 85,
         },
-      }, idempotencyKey ? `${idempotencyKey}:task:${index}` : undefined);
-      const onceResult =
-        result &&
-        typeof result === "object" &&
-        !Array.isArray(result) &&
-        "created" in result
-          ? (result as { created: boolean; taskId?: number })
-          : null;
-      if (onceResult) committedTaskCount += 1;
-      const insertId =
-        onceResult?.taskId ||
-        (result as any)?.[0]?.insertId ||
-        (result as any)?.insertId;
-      if (insertId) createdIds.push(insertId);
-    }
+      ],
+      reply: "Got it. I recorded that instruction for safe processing.",
+      fallback: true,
+    });
+  }
+}
 
-    // Send confirmation reply
-    const taskCount = createdIds.length || committedTaskCount;
-    const confirmText = createdIds.length === 0 && committedTaskCount > 0
-      ? `[Addison] ${reply} (${committedTaskCount} task${committedTaskCount === 1 ? "" : "s"} already recorded)`
-      : taskCount === 1
-      ? `[Addison] ${reply} (Task #${createdIds[0]} added)`
-      : `[Addison] ${reply} (${taskCount} tasks added: #${createdIds.join(", #")})`;
-
-    await sendConversationalReply(from, confirmText.substring(0, 320));
-
-  } catch (error: any) {
-    if (error instanceof ConversationalRuntimeBlockedError) return;
-    console.error("[SMS Conversation] NL instruction failed:", error.message);
-    if (createdIds.length > 0 || committedTaskCount > 0) {
-      console.error(
-        "[SMS Conversation] Task creation committed; fallback suppressed to prevent duplication"
+/**
+ * Apply an already-persisted plan. Every task in a provider delivery shares
+ * the same key namespace, including deterministic fallback plans.
+ */
+export async function applyConversationalSmsPlan(
+  planValue: SmsConversationPlan,
+  message: string,
+  idempotencyKey?: string
+): Promise<string> {
+  const plan = smsConversationPlanSchema.parse(planValue);
+  if (plan.tasks.length > 0) {
+    await assertConversationalRuntimeAllowed();
+  }
+  const createdIds: number[] = [];
+  for (let index = 0; index < plan.tasks.length; index += 1) {
+    const task = plan.tasks[index];
+    const input = {
+      description: task.description,
+      actionType: task.actionType,
+      priorityScore: task.priorityScore,
+      estimatedValue: task.estimatedValue?.toString(),
+      actionPayload: canonicalActionPayload(
+        task.actionType,
+        task.actionPayload
+      ),
+      source: "sms_instruction",
+      metadata: {
+        instructed_by: "verified_owner_sms",
+        original_message: message.substring(0, 200),
+      },
+    };
+    if (idempotencyKey) {
+      const result = await createTaskOnce(
+        `${idempotencyKey}:task:${index}`,
+        input
       );
-      return;
+      if (result.taskId) createdIds.push(result.taskId);
+    } else {
+      const result = await createTask(input);
+      const driverResult = (result as any)?.[0] ?? result;
+      const taskId = Number(driverResult?.insertId);
+      if (Number.isSafeInteger(taskId) && taskId > 0) createdIds.push(taskId);
     }
-    // Fallback: create a generic web_research task
+  }
+  if (plan.kind === "reply_only") return plan.reply;
+  const suffix =
+    createdIds.length === 1
+      ? ` (Task #${createdIds[0]} recorded)`
+      : createdIds.length > 1
+        ? ` (${createdIds.length} tasks recorded)`
+        : " (Instruction already recorded)";
+  return `[Addison] ${plan.reply}${suffix}`.substring(0, 320);
+}
+
+/**
+ * Backward-compatible direct entry point. The webhook uses the durable inbox
+ * path below this layer; tests and internal callers can still use this helper.
+ */
+export async function handleConversationalSMS(
+  message: string,
+  from: string,
+  idempotencyKey?: string
+): Promise<void> {
+  try {
+    await assertConversationalRuntimeAllowed();
+    const plan = await planConversationalSMS(message);
+    const reply = await applyConversationalSmsPlan(
+      plan,
+      message,
+      idempotencyKey
+    );
+    await assertConversationalRuntimeAllowed();
     try {
-      const result = await createConversationalTask({
-        description: `[From Tarz SMS] ${message}`,
-        actionType: "web_research",
-        priorityScore: 85,
-        source: "sms_instruction",
-        metadata: { instructed_by: "tarz_sms", original_message: message.substring(0, 200) },
-      }, idempotencyKey ? `${idempotencyKey}:fallback` : undefined);
-      const insertId =
-        (result as any)?.taskId ||
-        (result as any)?.[0]?.insertId ||
-        (result as any)?.insertId;
-      await sendConversationalReply(from, `[Addison] Got it${insertId ? `, logged as task #${insertId}` : ""}. I'll get on it.`);
-    } catch (fallbackError: any) {
-      if (fallbackError instanceof ConversationalRuntimeBlockedError) return;
-      await sendConversationalReply(from, "[Addison] Something went wrong logging that — try again in a sec.");
+      await sendSMS(from, reply);
+    } catch (error) {
+      console.error(
+        "[SMS Conversation] Confirmation reply failed after durable task work:",
+        error instanceof Error ? error.message : "unknown error"
+      );
     }
+  } catch (error) {
+    if (error instanceof ConversationalRuntimeBlockedError) return;
+    throw error;
   }
 }

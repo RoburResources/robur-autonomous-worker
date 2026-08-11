@@ -40,7 +40,7 @@ Goals → Task Generator → Task Executor → Evaluator → Self-Improver → (
 | **Safety Controls** | Daily call/email/spend limits, $500+ approval gate, kill switch via SMS |
 | **External Contact Gate** | Configurable restriction requiring SMS approval before contacting any real person |
 | **Admin Dashboard** | Live task queue, execution log, goals management, system health, config editor |
-| **SMS Webhook** | Inbound SMS handler for STOP/START/APPROVE/REJECT/STATUS commands |
+| **SMS Webhook** | Inbound SMS handler for emergency STOP and approval/status commands; resume stays on the authenticated owner dashboard |
 | **Pre-flight Validation** | Checks credentials, dependencies, and limits before executing any task |
 
 ---
@@ -134,11 +134,14 @@ Required variables (see [Environment Variables](#environment-variables) for full
 
 ```env
 RETELL_API_KEY=key_...
-RETELL_AGENT_ID=agent_...
+RETELL_WEBHOOK_API_KEY=key_...
+RETELL_EXECUTIVE_ASSISTANT_AGENT_ID=agent_...
+RETELL_EXECUTIVE_ASSISTANT_AGENT_VERSION=...
+RETELL_EXECUTIVE_ASSISTANT_AGENT_CONFIG_SHA256=...
 TWILIO_ACCOUNT_SID=AC...
 TWILIO_AUTH_TOKEN=...
 TWILIO_PHONE_NUMBER=+1...
-USER_PHONE=+1...
+OWNER_PHONE_E164=+1...
 ```
 
 ### 4. Apply Database Schema
@@ -193,10 +196,12 @@ manus-heartbeat create --name evening-briefing --cron "0 30 9 * * *" --path /api
 In your Twilio console, set the SMS webhook URL for your phone number to:
 
 ```
-https://your-deployment-url.manus.space/api/webhooks/sms
+https://your-certified-url.example/api/webhooks/sms#rc=3&tt=12000&rp=ct,rt,5xx
 ```
 
-This enables the STOP/START/APPROVE/REJECT/STATUS commands.
+This enables STOP/APPROVE/REJECT/STATUS. `START` is accepted only to explain
+that resume must use the authenticated owner dashboard; SMS delivery ordering
+cannot safely prove that a START is newer than an emergency STOP.
 
 ---
 
@@ -205,11 +210,24 @@ This enables the STOP/START/APPROVE/REJECT/STATUS commands.
 | Variable | Required | Description |
 |---|---|---|
 | `RETELL_API_KEY` | ✅ | Retell AI API key (`key_...`) |
-| `RETELL_AGENT_ID` | ✅ | Retell AI agent ID for outbound calls (`agent_...`) |
+| `RETELL_WEBHOOK_API_KEY` | ✅ | Retell webhook-badged HMAC key, separate from the REST key |
+| `RETELL_EXECUTIVE_ASSISTANT_AGENT_ID` | ✅ | Addison executive agent ID; never the receptionist/default agent |
+| `RETELL_EXECUTIVE_ASSISTANT_AGENT_VERSION` | ✅ | Pinned Addison agent version |
+| `RETELL_EXECUTIVE_ASSISTANT_AGENT_CONFIG_SHA256` | ✅ | Pinned hash of the reviewed Addison agent configuration |
+| `RETELL_EVENT_WEBHOOK_CERTIFIED` | ✅ | Enables verified Retell event ingestion only after provider certification |
+| `RETELL_CUSTOM_TOOL_CHANNEL_CERTIFIED` | ✅ | Enables the pinned Retell custom-tool channel only after certification |
+| `RETELL_TERMINAL_RECONCILIATION_CERTIFIED` | ✅ | Enables terminal-call reconciliation only after certification |
+| `RETELL_EXACT_SCRIPT_AGENT_CERTIFIED` | ✅ | Confirms the pinned agent delivers the exact approved script |
 | `TWILIO_ACCOUNT_SID` | ✅ | Twilio Account SID (`AC...`) |
 | `TWILIO_AUTH_TOKEN` | ✅ | Twilio Auth Token |
 | `TWILIO_PHONE_NUMBER` | ✅ | Twilio phone number for SMS/calls (E.164 format, e.g. `+15550001234`) |
-| `USER_PHONE` | ✅ | Owner's phone number for briefings and approval requests |
+| `OWNER_PHONE_E164` | ✅ | Owner's exact phone number for signed commands |
+| `OWNER_SMS_COMMAND_CHANNEL_CERTIFIED` | ✅ | Enables signed owner SMS commands only after live provider certification |
+| `LEGACY_WORKER_ENABLED` | ✅ | Deployment opt-in; keep `false` until the retired worker is deliberately resumed |
+| `LEGACY_WORKER_RISK_ACK` | ✅ | Exact risk acknowledgement required by the fail-closed deployment gate |
+| `PRIVATE_CANDIDATE_INTERNAL_ONLY` | ✅ | Restricts the private candidate to contained internal actions |
+| `PRIVATE_CANDIDATE_INTERNAL_AUTONOMY` | ✅ | Enables only the contained internal scheduler when all other gates pass |
+| `EXTERNAL_EFFECTS_EXACT_ARTIFACT_CERTIFIED` | ✅ | Global external-effect release gate; keep `false` for the private candidate |
 | `DATABASE_URL` | ✅ | MySQL connection string (auto-injected by Manus) |
 | `JWT_SECRET` | ✅ | Session signing secret (auto-injected by Manus) |
 | `BUILT_IN_FORGE_API_URL` | ✅ | Manus LLM proxy URL (auto-injected) |
@@ -254,7 +272,7 @@ Send these to your Twilio number to control the system:
 | Command | Action |
 |---|---|
 | `STOP` | Immediately pause all autonomous operations |
-| `START` | Resume operations |
+| `START` | Does not resume; directs the owner to the authenticated dashboard |
 | `APPROVE` | Approve the most recent pending approval task |
 | `REJECT` | Reject the most recent pending approval task |
 | `STATUS` | Get current system status |

@@ -253,9 +253,11 @@ describe("task executor atomic owner-run path", () => {
     process.env.TWILIO_PHONE_NUMBER = "+61411111111";
     process.env.SENDGRID_FROM_EMAIL = "operations@robur.test";
     process.env.SENDGRID_FROM_NAME = "Robur Resources";
-    process.env.RETELL_AGENT_ID = "agent_test12345678";
-    process.env.RETELL_AGENT_VERSION = "7";
-    process.env.RETELL_AGENT_CONFIG_SHA256 = "a".repeat(64);
+    process.env.RETELL_EXECUTIVE_ASSISTANT_AGENT_ID =
+      "agent_test12345678";
+    process.env.RETELL_EXECUTIVE_ASSISTANT_AGENT_VERSION = "7";
+    process.env.RETELL_EXECUTIVE_ASSISTANT_AGENT_CONFIG_SHA256 =
+      "a".repeat(64);
     mocks.isKillSwitchActive.mockReset().mockResolvedValue(false);
     mocks.requeueStaleInProgressTasks.mockResolvedValue([]);
     mocks.updateTask.mockResolvedValue(undefined);
@@ -565,6 +567,9 @@ describe("task executor atomic owner-run path", () => {
         executed: true,
         taskId: candidate.id,
         succeeded: true,
+        ...(actionType === "outbound_call"
+          ? { providerPending: true }
+          : {}),
       });
 
       expect(mocks.claimPendingTask).toHaveBeenCalledWith(
@@ -592,17 +597,22 @@ describe("task executor atomic owner-run path", () => {
         candidate.id,
         expect.any(String),
         expect.objectContaining({
-          status: "completed",
+          status:
+            actionType === "outbound_call" ? "in_progress" : "completed",
           metadata: expect.objectContaining({
             external_dispatch_id:
               "22222222-2222-4222-8222-222222222222",
             external_dispatch_provider: provider,
             external_provider_receipt: expect.objectContaining({ provider }),
+            ...(actionType === "outbound_call"
+              ? { external_provider_terminal_pending: true }
+              : {}),
           }),
         })
       );
 
       if (actionType === "outbound_call") {
+        expect(mocks.unlockDependents).not.toHaveBeenCalled();
         expect(mocks.makeOutboundCall).toHaveBeenCalledWith(
           expect.objectContaining({
             toNumber: artifact.target,
@@ -636,41 +646,54 @@ describe("task executor atomic owner-run path", () => {
     }
   );
 
-  it("does not reach a provider when the final atomic dispatch fence loses the claim", async () => {
-    const candidate = externalTask("send_sms");
-    mocks.getTaskById.mockResolvedValue(candidate);
-    mocks.getExecutionsForTask.mockResolvedValue([
-      matchingApprovalReceipt(candidate),
-    ]);
-    mocks.isPrivateCandidateInternalOnly.mockReturnValue(false);
-    mocks.claimPendingTask.mockResolvedValue(true);
-    mocks.beginClaimedExternalDispatch.mockResolvedValue(null);
+  it.each([
+    ["outbound_call", "retell"],
+    ["send_email", "sendgrid"],
+    ["send_sms", "twilio"],
+  ] as const)(
+    "does not reach the %s provider when the final atomic dispatch fence loses the claim",
+    async (actionType, provider) => {
+      const candidate = externalTask(actionType);
+      mocks.getTaskById.mockResolvedValue(candidate);
+      mocks.getExecutionsForTask.mockResolvedValue([
+        matchingApprovalReceipt(candidate),
+      ]);
+      mocks.isPrivateCandidateInternalOnly.mockReturnValue(false);
+      mocks.claimPendingTask.mockResolvedValue(true);
+      mocks.beginClaimedExternalDispatch.mockResolvedValue(null);
 
-    await expect(runTaskExecutor(candidate.id)).resolves.toEqual({
-      executed: false,
-      taskId: candidate.id,
-      error:
-        "External dispatch was blocked because the execution claim changed",
-    });
+      await expect(runTaskExecutor(candidate.id)).resolves.toEqual({
+        executed: false,
+        taskId: candidate.id,
+        error:
+          "External dispatch was blocked because the execution claim changed",
+      });
 
-    expect(mocks.beginClaimedExternalDispatch).toHaveBeenCalledWith(
-      candidate.id,
-      expect.any(String),
-      externalTaskApprovalFingerprint(candidate),
-      approvalRequestId,
-      "twilio"
-    );
-    expect(mocks.sendSMS).not.toHaveBeenCalledWith(
-      candidate.metadata.external_approval_artifact.target,
-      candidate.metadata.external_approval_artifact.content
-    );
-    expect(mocks.logExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actionType: "task_execution_claim_lost_before_external_dispatch",
-        outcome: "partial",
-      })
-    );
-  });
+      expect(mocks.beginClaimedExternalDispatch).toHaveBeenCalledWith(
+        candidate.id,
+        expect.any(String),
+        externalTaskApprovalFingerprint(candidate),
+        approvalRequestId,
+        provider
+      );
+      if (actionType === "outbound_call") {
+        expect(mocks.makeOutboundCall).not.toHaveBeenCalled();
+      } else if (actionType === "send_email") {
+        expect(mocks.sendEmail).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.sendSMS).not.toHaveBeenCalledWith(
+          candidate.metadata.external_approval_artifact.target,
+          candidate.metadata.external_approval_artifact.content
+        );
+      }
+      expect(mocks.logExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionType: "task_execution_claim_lost_before_external_dispatch",
+          outcome: "partial",
+        })
+      );
+    }
+  );
 
   it("holds the task for reconciliation when an accepted receipt loses its persistence fence", async () => {
     const candidate = externalTask("send_sms");
@@ -850,7 +873,10 @@ describe("task executor atomic owner-run path", () => {
       expect(mocks.updateClaimedTask).toHaveBeenCalledWith(
         candidate.id,
         expect.any(String),
-        expect.objectContaining({ status: "completed" })
+        expect.objectContaining({
+          status:
+            actionType === "outbound_call" ? "in_progress" : "completed",
+        })
       );
       expect(mocks.logExecution).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -884,7 +910,10 @@ describe("task executor atomic owner-run path", () => {
       expect(mocks.updateClaimedTask).toHaveBeenCalledWith(
         candidate.id,
         expect.any(String),
-        expect.objectContaining({ status: "completed" })
+        expect.objectContaining({
+          status:
+            actionType === "outbound_call" ? "in_progress" : "completed",
+        })
       );
       expect(mocks.logExecution).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -974,11 +1003,19 @@ describe("task executor atomic owner-run path", () => {
         return values[key] || null;
       });
 
-      await expect(runTaskExecutor(candidate.id)).resolves.toMatchObject({
-        executed: false,
-        taskId: candidate.id,
-        error: expect.stringContaining("automatic retry is blocked"),
-      });
+      await expect(runTaskExecutor(candidate.id)).resolves.toMatchObject(
+        actionType === "outbound_call"
+          ? {
+              executed: true,
+              taskId: candidate.id,
+              providerPending: true,
+            }
+          : {
+              executed: false,
+              taskId: candidate.id,
+              error: expect.stringContaining("automatic retry is blocked"),
+            }
+      );
       expect(
         mocks.persistClaimedExternalProviderReceipt
       ).toHaveBeenCalledWith(
@@ -992,12 +1029,21 @@ describe("task executor atomic owner-run path", () => {
       expect(mocks.updateClaimedTask).toHaveBeenLastCalledWith(
         candidate.id,
         expect.any(String),
-        expect.objectContaining({
-          status: "awaiting_approval",
-          metadata: expect.objectContaining({
-            external_outcome_reconciliation_required: true,
-          }),
-        })
+        expect.objectContaining(
+          actionType === "outbound_call"
+            ? {
+                status: "in_progress",
+                metadata: expect.objectContaining({
+                  external_provider_terminal_pending: true,
+                }),
+              }
+            : {
+                status: "awaiting_approval",
+                metadata: expect.objectContaining({
+                  external_outcome_reconciliation_required: true,
+                }),
+              }
+        )
       );
     }
   );

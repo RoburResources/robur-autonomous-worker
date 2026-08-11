@@ -385,7 +385,11 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
   const resolvedMaxTokens = max_tokens ?? maxTokens;
   if (typeof resolvedMaxTokens === "number") {
-    payload.max_tokens = resolvedMaxTokens;
+    if (model?.startsWith("gpt-5")) {
+      payload.max_completion_tokens = resolvedMaxTokens;
+    } else {
+      payload.max_tokens = resolvedMaxTokens;
+    }
   }
 
   if (thinking) {

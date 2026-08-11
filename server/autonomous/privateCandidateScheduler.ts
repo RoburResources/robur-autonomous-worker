@@ -8,6 +8,7 @@ import { runTaskGenerator } from "./taskGenerator";
 import { getLegacyWorkerRuntimeGate } from "../safety/legacyWorkerGate";
 import { privateCandidateInternalAutonomyEnabled } from "../safety/privateCandidatePolicy";
 import { claimPrivateCandidateJobSlot, logExecution } from "../db";
+import { getServiceReadiness } from "../_core/readiness";
 
 export type PrivateCandidateJob =
   | "task-generator"
@@ -128,6 +129,9 @@ export async function runPrivateCandidateSchedulerTick(
 
   tickInFlight = true;
   try {
+    const readiness = await getServiceReadiness();
+    if (!readiness.ready) return;
+
     const gate = await getLegacyWorkerRuntimeGate();
     if (!gate.allowed) return;
 

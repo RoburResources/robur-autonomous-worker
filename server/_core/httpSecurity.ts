@@ -5,6 +5,7 @@ type RateLimitOptions = {
   windowMs: number;
   namespace: string;
   maxBuckets?: number;
+  skip?: (req: Request) => boolean;
 };
 
 type RateBucket = {
@@ -85,6 +86,10 @@ export function createRateLimiter(options: RateLimitOptions): RequestHandler {
   }
 
   return (req, res, next) => {
+    if (options.skip?.(req)) {
+      next();
+      return;
+    }
     const now = Date.now();
     const key = getClientKey(req, options.namespace);
     let bucket = buckets.get(key);
@@ -117,6 +122,20 @@ export function createRateLimiter(options: RateLimitOptions): RequestHandler {
 
     next();
   };
+}
+
+export function isEmergencySmsIngress(req: Request): boolean {
+  const path = String(req.originalUrl || "").split("?", 1)[0];
+  return req.method.toUpperCase() === "POST" && path === "/api/webhooks/sms";
+}
+
+export function createEmergencySmsIngressRateLimiter(): RequestHandler {
+  return createRateLimiter({
+    max: 120,
+    windowMs: 60 * 1000,
+    namespace: "emergency-sms-reserved",
+    skip: req => !isEmergencySmsIngress(req),
+  });
 }
 
 function requestOrigin(req: Request): string | null {

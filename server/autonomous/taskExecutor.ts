@@ -99,6 +99,7 @@ export type TaskExecutorResult = {
   taskId?: number;
   succeeded?: boolean;
   retryScheduled?: boolean;
+  providerPending?: boolean;
   bookkeepingFailed?: boolean;
   error?: string;
 };
@@ -300,13 +301,17 @@ function assertApprovedProviderIdentity(
     artifact.actionType === "outbound_call" &&
     identity?.provider === "retell"
   ) {
-    const currentVersion = Number(process.env.RETELL_AGENT_VERSION);
+    const currentVersion = Number(
+      process.env.RETELL_EXECUTIVE_ASSISTANT_AGENT_VERSION
+    );
     if (
       identity.from !== currentFrom ||
-      identity.agentId !== (process.env.RETELL_AGENT_ID?.trim() || "") ||
+      identity.agentId !==
+        (process.env.RETELL_EXECUTIVE_ASSISTANT_AGENT_ID?.trim() || "") ||
       identity.agentVersion !== currentVersion ||
       identity.agentConfigSha256 !==
-        (process.env.RETELL_AGENT_CONFIG_SHA256?.trim() || "") ||
+        (process.env.RETELL_EXECUTIVE_ASSISTANT_AGENT_CONFIG_SHA256?.trim() ||
+          "") ||
       identity.scriptVariable !== "approved_script"
     ) {
       throw new ExternalEffectBlockedError(
@@ -523,7 +528,7 @@ async function prepareExternalApprovalArtifact(
       ? `${variant.content.trim()}\n\n${baseScript}`.slice(0, 4_000)
       : baseScript;
     const agentVersionText = requiredEnvironment(
-      "RETELL_AGENT_VERSION",
+      "RETELL_EXECUTIVE_ASSISTANT_AGENT_VERSION",
       /^(0|[1-9]\d{0,6})$/
     );
     return {
@@ -538,12 +543,12 @@ async function prepareExternalApprovalArtifact(
         provider: "retell",
         from: requiredE164Environment("TWILIO_PHONE_NUMBER"),
         agentId: requiredEnvironment(
-          "RETELL_AGENT_ID",
+          "RETELL_EXECUTIVE_ASSISTANT_AGENT_ID",
           /^agent_[A-Za-z0-9_-]{8,190}$/
         ),
         agentVersion: Number(agentVersionText),
         agentConfigSha256: requiredEnvironment(
-          "RETELL_AGENT_CONFIG_SHA256",
+          "RETELL_EXECUTIVE_ASSISTANT_AGENT_CONFIG_SHA256",
           /^[a-f0-9]{64}$/
         ),
         scriptVariable: "approved_script",
@@ -1600,13 +1605,22 @@ export async function runTaskExecutor(
     const nextVerificationRetryCount = verificationRetryScheduled
       ? priorVerificationRetryCount + 1
       : priorVerificationRetryCount;
-    const executionOutcome = result.success
-      ? "success"
+    const providerTerminalPending =
+      result.success === true &&
+      task.actionType === "outbound_call" &&
+      acceptedExternalProvider === "retell" &&
+      !!acceptedExternalReceipt;
+    const executionOutcome = providerTerminalPending
+      ? "pending"
+      : result.success
+        ? "success"
       : verificationRetryScheduled
         ? "partial"
         : "failure";
-    const finalStatus = result.success
-      ? "completed"
+    const finalStatus = providerTerminalPending
+      ? "in_progress"
+      : result.success
+        ? "completed"
       : verificationRetryScheduled
         ? "pending"
         : "failed";
@@ -1636,13 +1650,23 @@ export async function runTaskExecutor(
     const finalised = await updateClaimedTask(task.id, executionToken, {
       status: finalStatus,
       resultSummary: result.summary,
-      completedAt: finalStatus === "pending" ? null : finalisedAt,
+      completedAt:
+        finalStatus === "pending" || finalStatus === "in_progress"
+          ? null
+          : finalisedAt,
       metadata: {
         ...finalMeta,
         premortem_confidence: premortem.confidenceScore,
         premortem_failure_modes: premortem.failureModes,
         premortem_ran_at: new Date().toISOString(),
         ...(result.metadata || {}),
+        ...(providerTerminalPending
+          ? {
+              external_provider_terminal_pending: true,
+              external_provider_terminal_pending_since:
+                finalisedAt.toISOString(),
+            }
+          : {}),
         verification_result: verificationResult
           ? {
               verified: verificationResult.verified,
@@ -1715,6 +1739,7 @@ export async function runTaskExecutor(
       executed: true,
       taskId: task.id,
       succeeded: result.success,
+      ...(providerTerminalPending ? { providerPending: true } : {}),
       ...(verificationRetryScheduled ? { retryScheduled: true } : {}),
       ...(result.success ? {} : { error: result.summary }),
     };
@@ -1767,18 +1792,19 @@ export async function runTaskExecutor(
 
     // Task counts are derived from canonical task/execution records. Avoid
     // opportunistic counter writes that can overwrite the real daily totals.
-    if (result.success) {
+    if (result.success && !providerTerminalPending) {
       // Unlock DAG dependents
       await unlockDependents(task.id);
     }
 
     // Store task outcome in Mem0 memory for future reference
-    if (!verificationRetryScheduled) {
+    if (!verificationRetryScheduled && !providerTerminalPending) {
       await storeTaskOutcome({
         taskId: task.id,
         description: task.description,
         actionType: task.actionType || "unknown",
-        outcome: executionOutcome,
+        outcome:
+          executionOutcome === "pending" ? "partial" : executionOutcome,
         resultSummary: result.summary.substring(0, 300),
         confidence: premortem.confidenceScore,
         executionTimeMs: durationMs,
@@ -1802,6 +1828,8 @@ export async function runTaskExecutor(
           error: bookkeepingError,
           taskStatus: finalisedResult.retryScheduled
             ? "pending"
+            : finalisedResult.providerPending
+              ? "in_progress"
             : finalisedResult.succeeded
               ? "completed"
               : "failed",
@@ -2081,30 +2109,9 @@ async function executeCall(
       )
     );
 
-    if (artifact.experimentId && artifact.variantId) {
-      await recordVariantOutcome({
-        experimentId: artifact.experimentId,
-        variantId: artifact.variantId,
-        taskId: task.id,
-        success: true,
-        confidenceScore: 0.8,
-      }).catch(() => {});
-    }
-
-    if (artifact.target !== (await getConfig("user_phone"))) {
-      await storeContactInteraction({
-        contactName:
-          (task.metadata as any)?.contactName || artifact.target,
-        contactType: "supplier",
-        channel: "phone",
-        outcome: "connected",
-        notes: artifact.content.substring(0, 200),
-      }).catch(() => {});
-    }
-
     return {
       success: true,
-      summary: `Call initiated. Call ID: ${callResult.callId}. Approved script: ${artifact.content.substring(0, 200)}`,
+      summary: `Call accepted by Retell and awaiting terminal analysis. Call ID: ${callResult.callId}. Approved script: ${artifact.content.substring(0, 200)}`,
       metadata: {
         external_provider_receipt: providerReceipt,
       },
