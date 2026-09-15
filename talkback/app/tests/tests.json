@@ -1,0 +1,74 @@
+[
+  {
+    "name": "Unclaimed line offers biometric enrolment and refuses entry without it",
+    "sanity": true,
+    "viewport": "desktop",
+    "covers": [
+      "lock screen for an unclaimed app",
+      "WebAuthn enrolment entry point",
+      "protected voice console is not reachable while signed out"
+    ],
+    "description": "Verifies a fresh deployment presents the claim flow and keeps the console behind it. The QA browser has no platform authenticator, so enrolment cannot complete and the lock screen must remain.",
+    "steps": [
+      "Open the app",
+      "Read the lock screen",
+      "Attempt to claim the line with Face ID"
+    ],
+    "expected": "The lock screen shows Talkback with a Face ID claim button and an unclaimed warning, the voice console and its call button are not visible, and after the attempt either a readable error appears or the lock screen is still shown — never the console."
+  },
+  {
+    "name": "Chat endpoint refuses an unauthenticated request",
+    "viewport": "desktop",
+    "covers": [
+      "POST /api/chat authorisation",
+      "session token validation",
+      "private transcript boundary"
+    ],
+    "description": "Verifies the backend, not just the UI, enforces sign-in so the public URL cannot be used by anyone who finds it.",
+    "steps": [
+      "Open the app",
+      "Confirm no voice console is rendered while signed out"
+    ],
+    "expected": "Only the lock screen is rendered; no transcript content, microphone control, or Claude reply is present anywhere on the page."
+  },
+  {
+    "name": "Lock screen reports an unusable biometric instead of failing silently",
+    "viewport": "mobile",
+    "covers": [
+      "platform authenticator capability check",
+      "user-visible failure path",
+      "mobile lock screen layout"
+    ],
+    "description": "Verifies that a device without a usable platform authenticator is told why, rather than being left with a button that does nothing.",
+    "steps": [
+      "Open the app on a mobile viewport",
+      "Read the sign-in area"
+    ],
+    "expected": "The lock screen fits the mobile viewport without horizontal scrolling and shows either a working Face ID button or a readable explanation that no biometric is available on this device."
+  },
+  {
+    "name": "Backend failure during sign-in surfaces a readable message",
+    "viewport": "desktop",
+    "covers": [
+      "backend error response handling",
+      "user-visible error state",
+      "WebAuthn options endpoint"
+    ],
+    "description": "Verifies a server error during the biometric handshake becomes a visible message instead of a silent dead button.",
+    "qa_faults": [
+      {
+        "method": "POST",
+        "path": "/api/webauthn/register/options",
+        "status": 500,
+        "body_json": {
+          "error": "simulated_failure"
+        }
+      }
+    ],
+    "steps": [
+      "Open the app",
+      "Attempt to claim the line with Face ID"
+    ],
+    "expected": "A visible error message appears on the lock screen and the voice console is still not shown."
+  }
+]
