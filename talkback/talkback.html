@@ -1,0 +1,934 @@
+<title>Talkback</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;450;600&display=swap">
+<style>
+  :root{
+    --ground:#EFF2F1;
+    --panel:#FFFFFF;
+    --panel-2:#F6F8F7;
+    --ink:#101817;
+    --ink-2:#3A4A47;
+    --muted:#5E706D;
+    --line:#D3DBD9;
+    --line-soft:#E4EAE8;
+    --accent:#0E8C8C;
+    --accent-ink:#065E5E;
+    --ok:#2E7D4F;
+    --warn:#8A6100;
+    --hot:#B3392C;
+    --lamp-off:#BFCAC7;
+    --shadow:0 1px 2px rgba(16,24,23,.06),0 8px 24px -16px rgba(16,24,23,.28);
+    --r:10px;
+    --sans:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    --cond:"IBM Plex Sans Condensed","IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#101615;
+      --panel:#18211F;
+      --panel-2:#1E2826;
+      --ink:#E8EFED;
+      --ink-2:#B6C4C1;
+      --muted:#8A9B98;
+      --line:#26322F;
+      --line-soft:#202B29;
+      --accent:#37B3B3;
+      --accent-ink:#7FD4D4;
+      --ok:#4CAF7D;
+      --warn:#D6A62B;
+      --hot:#E2695C;
+      --lamp-off:#33403D;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#101615;
+    --panel:#18211F;
+    --panel-2:#1E2826;
+    --ink:#E8EFED;
+    --ink-2:#B6C4C1;
+    --muted:#8A9B98;
+    --line:#26322F;
+    --line-soft:#202B29;
+    --accent:#37B3B3;
+    --accent-ink:#7FD4D4;
+    --ok:#4CAF7D;
+    --warn:#D6A62B;
+    --hot:#E2695C;
+    --lamp-off:#33403D;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--ground);color:var(--ink);
+    font-family:var(--sans);font-size:15px;line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{
+    height:100%;display:flex;flex-direction:column;
+    max-width:1180px;margin:0 auto;padding:0 16px;
+  }
+
+  /* ---- header ---- */
+  .top{
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding-block:14px 12px;border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex;align-items:baseline;gap:10px;margin-right:auto}
+  .brand h1{
+    font-family:var(--cond);font-weight:700;font-size:22px;letter-spacing:.02em;
+    margin:0;text-wrap:balance;
+  }
+  .brand .sub{
+    font-family:var(--mono);font-size:11px;color:var(--muted);
+    letter-spacing:.06em;text-transform:uppercase;
+  }
+  .statepill{
+    display:inline-flex;align-items:center;gap:8px;
+    font-family:var(--cond);font-weight:600;font-size:12.5px;
+    letter-spacing:.09em;text-transform:uppercase;
+    padding:6px 12px 6px 10px;border-radius:999px;
+    border:1px solid var(--line);background:var(--panel);color:var(--ink-2);
+  }
+  .statepill .dot{width:9px;height:9px;border-radius:50%;background:var(--lamp-off)}
+  .statepill[data-s="listening"]{border-color:var(--ok);color:var(--ok)}
+  .statepill[data-s="listening"] .dot{background:var(--ok);animation:pulse 1.4s ease-in-out infinite}
+  .statepill[data-s="thinking"]{border-color:var(--warn);color:var(--warn)}
+  .statepill[data-s="thinking"] .dot{background:var(--warn);animation:pulse .9s ease-in-out infinite}
+  .statepill[data-s="speaking"]{border-color:var(--accent);color:var(--accent-ink)}
+  .statepill[data-s="speaking"] .dot{background:var(--accent)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  @media (prefers-reduced-motion:reduce){.statepill .dot{animation:none!important}}
+
+  /* ---- main split ---- */
+  .main{
+    flex:1;min-height:0;display:grid;gap:16px;
+    grid-template-columns:minmax(0,1fr) 268px;
+    padding-block:16px;
+  }
+  /* Phone: let the page scroll instead of squeezing a fixed-height console,
+     and keep the transcript first — it is what the line is for. */
+  @media (max-width:840px){
+    .app{height:auto;min-height:100%}
+    .main{grid-template-columns:minmax(0,1fr);padding-block:14px}
+    .tape{min-height:56vh}
+    .controls{position:sticky;bottom:0;background:var(--ground);
+      padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}
+  }
+
+  /* ---- transcript tape ---- */
+  .tape{
+    min-height:0;display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    box-shadow:var(--shadow);overflow:hidden;
+  }
+  .tape-head{
+    display:flex;align-items:center;gap:10px;
+    padding:9px 14px;border-bottom:1px solid var(--line-soft);
+    font-family:var(--cond);font-size:11.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--muted);font-weight:600;
+  }
+  .tape-head .grow{margin-left:auto;font-family:var(--mono);letter-spacing:.04em;
+    font-variant-numeric:tabular-nums;text-transform:none}
+  .log{flex:1;min-height:0;overflow-y:auto;padding:14px;display:flex;
+    flex-direction:column;gap:12px;scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){.log{scroll-behavior:auto}}
+
+  .turn{display:grid;grid-template-columns:52px minmax(0,1fr);gap:12px;align-items:start}
+  .turn .who{
+    font-family:var(--cond);font-size:10.5px;font-weight:700;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--muted);padding-top:3px;
+  }
+  .turn[data-role="you"] .who{color:var(--ok)}
+  .turn[data-role="claude"] .who{color:var(--accent-ink)}
+  .turn[data-role="relay"] .who{color:var(--warn)}
+  .turn .body{min-width:0}
+  .turn .text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;max-width:62ch}
+  .turn[data-role="claude"] .text{border-left:2px solid var(--accent);padding-left:11px}
+  .turn[data-role="relay"] .text{border-left:2px solid var(--warn);padding-left:11px}
+  .turn .meta{
+    display:flex;align-items:center;gap:10px;margin-top:5px;
+    font-family:var(--mono);font-size:10.5px;color:var(--muted);
+    font-variant-numeric:tabular-nums;
+  }
+  .turn.system .text{color:var(--muted);font-size:13.5px;max-width:64ch}
+  .interim{opacity:.62;font-style:italic}
+  .replay{
+    border:1px solid var(--line);background:transparent;color:var(--muted);
+    font-family:var(--mono);font-size:10px;letter-spacing:.04em;
+    border-radius:5px;padding:1px 7px;cursor:pointer;
+  }
+  .replay:hover{border-color:var(--accent);color:var(--accent-ink)}
+
+  /* ---- monitor rail ---- */
+  .rail{display:flex;flex-direction:column;gap:12px;min-width:0}
+  @media (max-width:840px){.rail{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
+  @media (max-width:520px){.rail{grid-template-columns:1fr}}
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    padding:12px 13px;min-width:0;
+  }
+  .card h2{
+    font-family:var(--cond);font-size:11px;font-weight:700;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--muted);margin:0 0 10px;
+  }
+  .lamp{display:flex;align-items:center;gap:9px;padding:5px 0;min-width:0}
+  .lamp + .lamp{border-top:1px solid var(--line-soft)}
+  .lamp .led{width:8px;height:8px;border-radius:50%;background:var(--lamp-off);flex:none;
+    box-shadow:0 0 0 2px color-mix(in srgb,var(--lamp-off) 28%,transparent)}
+  .lamp[data-v="ok"] .led{background:var(--ok);box-shadow:0 0 0 2px color-mix(in srgb,var(--ok) 25%,transparent)}
+  .lamp[data-v="warn"] .led{background:var(--warn);box-shadow:0 0 0 2px color-mix(in srgb,var(--warn) 25%,transparent)}
+  .lamp[data-v="hot"] .led{background:var(--hot);box-shadow:0 0 0 2px color-mix(in srgb,var(--hot) 25%,transparent)}
+  .lamp .nm{font-size:13px}
+  .lamp .vl{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--muted);
+    text-align:right;overflow-wrap:anywhere}
+
+  .meter{height:8px;border-radius:4px;background:var(--panel-2);
+    border:1px solid var(--line-soft);overflow:hidden}
+  .meter i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--ok),var(--accent));
+    transition:width .07s linear}
+  @media (prefers-reduced-motion:reduce){.meter i{transition:none}}
+  .scale{display:flex;justify-content:space-between;font-family:var(--mono);
+    font-size:9.5px;color:var(--muted);margin-top:4px;font-variant-numeric:tabular-nums}
+
+  .kv{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:12.5px}
+  .kv + .kv{border-top:1px solid var(--line-soft)}
+  .kv dt{color:var(--muted)}
+  .kv dd{margin:0;font-family:var(--mono);font-variant-numeric:tabular-nums;
+    font-size:11.5px;text-align:right;overflow-wrap:anywhere}
+
+  /* ---- control bar ---- */
+  .controls{
+    border-top:1px solid var(--line);padding-block:12px 16px;
+    display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+  }
+  .mic{
+    display:inline-flex;align-items:center;gap:11px;
+    font-family:var(--cond);font-weight:700;font-size:14px;letter-spacing:.07em;
+    text-transform:uppercase;
+    padding:13px 22px;border-radius:999px;cursor:pointer;
+    border:1px solid var(--accent);background:var(--accent);color:#fff;
+    box-shadow:var(--shadow);touch-action:manipulation;user-select:none;
+  }
+  .mic:disabled{opacity:.45;cursor:not-allowed}
+  .mic[data-on="1"]{background:var(--ok);border-color:var(--ok)}
+  .mic .ring{width:11px;height:11px;border-radius:50%;background:#fff;opacity:.9}
+  .mic[data-on="1"] .ring{animation:pulse 1.2s ease-in-out infinite}
+  @media (prefers-reduced-motion:reduce){.mic .ring{animation:none}}
+
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+  .seg button{
+    border:0;background:transparent;color:var(--muted);cursor:pointer;
+    font-family:var(--cond);font-weight:600;font-size:11.5px;letter-spacing:.07em;
+    text-transform:uppercase;padding:8px 12px;
+  }
+  .seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+  .seg button + button{border-left:1px solid var(--line)}
+
+  .say{flex:1 1 240px;display:flex;gap:8px;min-width:0}
+  .say input{
+    flex:1;min-width:0;font-family:var(--sans);font-size:14px;color:var(--ink);
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+  }
+  .say input::placeholder{color:var(--muted)}
+  .say button{
+    border:1px solid var(--line);background:var(--panel);color:var(--ink-2);
+    border-radius:8px;padding:0 14px;cursor:pointer;
+    font-family:var(--cond);font-weight:600;font-size:12px;letter-spacing:.07em;text-transform:uppercase;
+  }
+  .say button:hover{border-color:var(--accent);color:var(--accent-ink)}
+
+  select{
+    font-family:var(--sans);font-size:12.5px;color:var(--ink);background:var(--panel);
+    border:1px solid var(--line);border-radius:8px;padding:7px 9px;max-width:100%;
+  }
+  label.fld{display:flex;flex-direction:column;gap:5px;font-family:var(--cond);
+    font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+
+  a{color:var(--accent-ink)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+  .note{font-size:12px;color:var(--muted);font-family:var(--mono);line-height:1.5}
+  .hide{display:none!important}
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <h1>Talkback</h1>
+      <span class="sub" id="chan">channel&nbsp;—&nbsp;opening</span>
+    </div>
+    <span class="statepill" id="pill" data-s="idle"><span class="dot"></span><span id="pilltx">Line closed</span></span>
+  </header>
+
+  <div class="main">
+    <section class="tape" aria-label="Conversation transcript">
+      <div class="tape-head">
+        <span>Transcript</span>
+        <span class="grow" id="tapemeta">0 turns</span>
+      </div>
+      <div class="log" id="log" role="log" aria-live="polite"></div>
+    </section>
+
+    <aside class="rail">
+      <div class="card">
+        <h2>Signal path</h2>
+        <div class="lamp" id="l-mic" data-v="off"><span class="led"></span><span class="nm">Microphone</span><span class="vl" id="v-mic">checking</span></div>
+        <div class="lamp" id="l-stt" data-v="off"><span class="led"></span><span class="nm">Speech&nbsp;in</span><span class="vl" id="v-stt">checking</span></div>
+        <div class="lamp" id="l-brain" data-v="off"><span class="led"></span><span class="nm">Claude</span><span class="vl" id="v-brain">checking</span></div>
+        <div class="lamp" id="l-tts" data-v="off"><span class="led"></span><span class="nm">Voice&nbsp;out</span><span class="vl" id="v-tts">checking</span></div>
+        <div class="lamp" id="l-relay" data-v="off"><span class="led"></span><span class="nm">Relay</span><span class="vl" id="v-relay">checking</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Input level</h2>
+        <div class="meter" aria-hidden="true"><i id="bar"></i></div>
+        <div class="scale"><span>-60</span><span>-30</span><span>-12</span><span>0 dB</span></div>
+        <dl style="margin:12px 0 0">
+          <div class="kv"><dt>Round trip</dt><dd id="k-rt">—</dd></div>
+          <div class="kv"><dt>Heard</dt><dd id="k-heard">—</dd></div>
+          <div class="kv"><dt>Turns</dt><dd id="k-turns">0</dd></div>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h2>Patch</h2>
+        <label class="fld" for="voice">Voice out
+          <select id="voice"></select>
+        </label>
+        <label class="fld" for="lang" style="margin-top:10px">Recognition
+          <select id="lang">
+            <option value="en-AU" selected>English (Australia)</option>
+            <option value="en-GB">English (UK)</option>
+            <option value="en-US">English (US)</option>
+          </select>
+        </label>
+        <div class="note" style="margin-top:10px" id="relaynote">Relay idle.</div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="controls">
+    <button class="mic" id="mic" data-on="0" type="button" disabled>
+      <span class="ring"></span><span id="mictx">Open line</span>
+    </button>
+    <div class="seg" role="group" aria-label="Talk mode">
+      <button type="button" id="m-free" aria-pressed="true">Hands-free</button>
+      <button type="button" id="m-ptt" aria-pressed="false">Push to talk</button>
+    </div>
+    <div class="seg" role="group" aria-label="Duplex">
+      <button type="button" id="d-half" aria-pressed="true">Half duplex</button>
+      <button type="button" id="d-full" aria-pressed="false">Barge-in</button>
+    </div>
+    <form class="say" id="sayform">
+      <input id="sayin" type="text" autocomplete="off" placeholder="…or type it, if the room is loud">
+      <button type="submit">Send</button>
+    </form>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var $ = function(id){ return document.getElementById(id); };
+  var log = $("log");
+
+  var S = {
+    state:"idle", mode:"free", duplex:"half",
+    turns:[], sessionId:null,
+    sample:null, db:null,
+    rec:null, recOn:false, wantMic:false,
+    speaking:false, speakQ:[], utterQ:[],
+    ctl:null, askedAt:0,
+    interimEl:null,
+    relaySeen:{}, relayBooted:false,
+    micGranted:false, statusTimer:null, lastStatus:""
+  };
+
+  // Session id: stable per page-load, readable in the relay.
+  S.sessionId = "s" + new Date().toISOString().slice(0,10).replace(/-/g,"") + "-" +
+                Math.random().toString(36).slice(2,7);
+  $("chan").textContent = "channel " + S.sessionId;
+
+  /* ---------------- transcript ---------------- */
+
+  function clock(d){
+    d = d || new Date();
+    return String(d.getHours()).padStart(2,"0") + ":" +
+           String(d.getMinutes()).padStart(2,"0") + ":" +
+           String(d.getSeconds()).padStart(2,"0");
+  }
+
+  function addTurn(role, text, opts){
+    opts = opts || {};
+    var row = document.createElement("div");
+    row.className = "turn" + (role === "system" ? " system" : "");
+    row.setAttribute("data-role", role);
+
+    var who = document.createElement("div");
+    who.className = "who";
+    who.textContent = role === "you" ? "You" : role === "claude" ? "Claude"
+                    : role === "relay" ? "Relay" : "Sys";
+
+    var body = document.createElement("div");
+    body.className = "body";
+    var p = document.createElement("p");
+    p.className = "text" + (opts.interim ? " interim" : "");
+    p.textContent = text;
+    body.appendChild(p);
+
+    if (role !== "system" && !opts.interim){
+      var meta = document.createElement("div");
+      meta.className = "meta";
+      var t = document.createElement("span");
+      t.textContent = clock();
+      meta.appendChild(t);
+      if (opts.ms){
+        var m = document.createElement("span");
+        m.textContent = opts.ms + " ms";
+        meta.appendChild(m);
+      }
+      if (role === "claude" || role === "relay"){
+        var rb = document.createElement("button");
+        rb.className = "replay"; rb.type = "button"; rb.textContent = "replay";
+        rb.addEventListener("click", function(){ speak(p.textContent, true); });
+        meta.appendChild(rb);
+      }
+      body.appendChild(meta);
+    }
+
+    row.appendChild(who); row.appendChild(body);
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
+    return p;
+  }
+
+  function setState(s){
+    S.state = s;
+    var pill = $("pill"), tx = $("pilltx");
+    pill.setAttribute("data-s", s);
+    tx.textContent = s === "listening" ? "Line open"
+                   : s === "thinking"  ? "Working"
+                   : s === "speaking"  ? "Speaking"
+                   : "Line closed";
+    pushStatus();
+  }
+
+  function lamp(id, v, text){
+    var el = $("l-" + id);
+    if (el) el.setAttribute("data-v", v);
+    var vv = $("v-" + id);
+    if (vv && text != null) vv.textContent = text;
+  }
+
+  function counts(){
+    var n = S.turns.length;
+    $("tapemeta").textContent = n + (n === 1 ? " turn" : " turns");
+    $("k-turns").textContent = String(n);
+  }
+
+  /* ---------------- text to speech ---------------- */
+
+  var synth = window.speechSynthesis || null;
+  var voices = [];
+
+  function loadVoices(){
+    if (!synth) return;
+    voices = synth.getVoices() || [];
+    var sel = $("voice");
+    if (!voices.length){ sel.innerHTML = '<option>System default</option>'; return; }
+    var keep = sel.value;
+    sel.innerHTML = "";
+    voices.forEach(function(v, i){
+      var o = document.createElement("option");
+      o.value = String(i);
+      o.textContent = v.name + " · " + v.lang;
+      sel.appendChild(o);
+    });
+    var pref = voices.findIndex(function(v){ return /en-AU/i.test(v.lang); });
+    if (pref < 0) pref = voices.findIndex(function(v){ return /^en/i.test(v.lang); });
+    sel.value = keep && voices[keep] ? keep : String(pref < 0 ? 0 : pref);
+    lamp("tts", "ok", voices.length + " voices");
+  }
+
+  if (synth){
+    loadVoices();
+    synth.addEventListener("voiceschanged", loadVoices);
+    lamp("tts", "ok", "ready");
+  } else {
+    lamp("tts", "hot", "unavailable");
+  }
+
+  function chosenVoice(){
+    var i = parseInt($("voice").value, 10);
+    return (voices && voices[i]) ? voices[i] : null;
+  }
+
+  // Speak a chunk. Queue so streamed sentences play in order.
+  function speak(text, isReplay){
+    if (!synth || !text || !text.trim()) return;
+    S.speakQ.push(text.trim());
+    drain(isReplay);
+  }
+
+  function drain(isReplay){
+    if (!synth || S.speaking) return;
+    var next = S.speakQ.shift();
+    if (next == null){
+      // queue empty — hand the line back to the mic
+      if (S.state === "speaking") setState(S.wantMic ? "listening" : "idle");
+      if (S.duplex === "half" && S.wantMic) startRec();
+      return;
+    }
+    S.speaking = true;
+    if (!isReplay) setState("speaking");
+    if (S.duplex === "half") stopRec();
+
+    var u = new SpeechSynthesisUtterance(next);
+    var v = chosenVoice();
+    if (v){ u.voice = v; u.lang = v.lang; }
+    u.rate = 1.05; u.pitch = 1;
+    u.onend = u.onerror = function(){ S.speaking = false; drain(isReplay); };
+    S.utterQ.push(u);
+    try { synth.speak(u); }
+    catch(e){ S.speaking = false; }
+  }
+
+  function shutUp(){
+    S.speakQ.length = 0;
+    if (synth) { try { synth.cancel(); } catch(e){} }
+    S.speaking = false;
+  }
+
+  /* ---------------- input level meter ---------------- */
+
+  function startMeter(stream){
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    var ctx, src, an, buf, bar = $("bar");
+    try {
+      ctx = new AC();
+      src = ctx.createMediaStreamSource(stream);
+      an = ctx.createAnalyser();
+      an.fftSize = 1024; an.smoothingTimeConstant = .75;
+      src.connect(an);
+      buf = new Float32Array(an.fftSize);
+    } catch(e){ return; }
+
+    (function tick(){
+      requestAnimationFrame(tick);
+      an.getFloatTimeDomainData(buf);
+      var sum = 0;
+      for (var i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      var rms = Math.sqrt(sum / buf.length);
+      var db = 20 * Math.log10(rms || 1e-7);          // ~-140..0
+      var pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+      bar.style.width = pct.toFixed(1) + "%";
+    })();
+  }
+
+  navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+    ? navigator.mediaDevices.getUserMedia({ audio:true }).then(function(st){
+        S.micGranted = true;
+        lamp("mic", "ok", "open");
+        startMeter(st);
+      }).catch(function(){
+        lamp("mic", "hot", "blocked");
+      })
+    : lamp("mic", "hot", "unsupported");
+
+  /* ---------------- speech recognition ---------------- */
+
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  function buildRec(){
+    if (!SR) return null;
+    var r = new SR();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = $("lang").value;
+
+    r.onstart = function(){ S.recOn = true; lamp("stt", "ok", "listening"); };
+
+    r.onresult = function(ev){
+      var interim = "", final = "";
+      for (var i = ev.resultIndex; i < ev.results.length; i++){
+        var res = ev.results[i];
+        if (res.isFinal) final += res[0].transcript;
+        else interim += res[0].transcript;
+      }
+
+      if (interim){
+        if (S.duplex === "full" && S.speaking) { shutUp(); abortAsk(); }
+        if (!S.interimEl) S.interimEl = addTurn("you", interim, { interim:true });
+        else S.interimEl.textContent = interim;
+        log.scrollTop = log.scrollHeight;
+      }
+
+      if (final && final.trim()){
+        if (S.interimEl){ S.interimEl.parentElement.parentElement.remove(); S.interimEl = null; }
+        $("k-heard").textContent = clock();
+        handle(final.trim());
+      }
+    };
+
+    r.onerror = function(ev){
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed"){
+        S.wantMic = false; setMicBtn();
+        lamp("stt", "hot", "permission denied");
+        addTurn("system", "The browser blocked microphone access. Allow the mic for this page, then open the line again. You can still type below.");
+      } else if (ev.error === "audio-capture"){
+        lamp("stt", "hot", "no input device");
+      } else if (ev.error !== "no-speech" && ev.error !== "aborted"){
+        lamp("stt", "warn", ev.error);
+      }
+    };
+
+    r.onend = function(){
+      S.recOn = false;
+      // Chrome ends the stream on its own; restart while the line is open.
+      if (S.wantMic && !(S.duplex === "half" && S.speaking)){
+        setTimeout(startRec, 220);
+      } else {
+        lamp("stt", S.wantMic ? "warn" : "off", S.wantMic ? "paused" : "closed");
+      }
+    };
+    return r;
+  }
+
+  function startRec(){
+    if (!SR || S.recOn || !S.wantMic) return;
+    if (S.duplex === "half" && S.speaking) return;
+    if (!S.rec) S.rec = buildRec();
+    try { S.rec.lang = $("lang").value; S.rec.start(); }
+    catch(e){ /* already started */ }
+  }
+
+  function stopRec(){
+    if (S.rec && S.recOn){ try { S.rec.stop(); } catch(e){} }
+  }
+
+  if (!SR){
+    lamp("stt", "hot", "not in this browser");
+  } else {
+    lamp("stt", "off", "closed");
+  }
+
+  /* ---------------- the brain: claude.use("sample") ---------------- */
+
+  var BRIEF =
+    "You are Claude, talking with Michael over a live voice line called Talkback. " +
+    "He speaks into a microphone; your reply is read aloud by a speech synthesiser and he hears it. " +
+    "Because this is speech, not writing:\n" +
+    "- Keep replies short. Two or three sentences is usually right. Never more than about 90 words unless he asks you to go long.\n" +
+    "- Write plain spoken English. No markdown, no bullet points, no headings, no code blocks, no emoji, no stage directions.\n" +
+    "- Expand anything that would be read out badly: say 'about forty per cent', not '~40%'.\n" +
+    "- Speech recognition makes mistakes. If a word looks garbled, guess from context and carry on; ask only if the meaning really turns on it.\n" +
+    "- Answer first, then offer the follow-up. Don't open with pleasantries every turn.\n" +
+    "- If he asks you to do something you cannot do from a web page — edit his repositories, run commands, deploy — say so plainly in one sentence and tell him it is the kind of thing to hand to his Claude Code session, which reads this transcript through the relay.\n" +
+    "You have no memory between turns beyond the transcript you are given here.";
+
+  function abortAsk(){
+    if (S.ctl){ try { S.ctl.abort(); } catch(e){} S.ctl = null; }
+  }
+
+  function trimTurns(){
+    // Keep the brief plus a bounded recent window, well under the 64 KiB cap.
+    var keep = S.turns.slice(-24);
+    var out = [], bytes = 0;
+    for (var i = keep.length - 1; i >= 0; i--){
+      var b = keep[i].content.length;
+      if (bytes + b > 24000) break;
+      bytes += b; out.unshift(keep[i]);
+    }
+    return out;
+  }
+
+  var ERRCOPY = {
+    not_granted:"This page isn't allowed to use Claude on your account, so the voice side is off. The transcript and relay still work.",
+    sampling_disabled:"Claude isn't available on this account, so the voice side is off.",
+    not_declared:"This page no longer declares the Claude capability. Republish it to restore the voice side.",
+    capability_disabled:"Claude can't run in this view. Try opening the artifact in a normal browser tab.",
+    capability_removed:"This viewer is too old to run the Claude capability.",
+    rate_limited:"That's too many requests in a row. Give it a minute, then talk again.",
+    session_expired:"Your Claude session expired. Sign in again and reopen the line.",
+    refused:"Claude declined to answer that one. Try asking it a different way.",
+    empty_completion:"Claude came back with nothing. Try asking it a different way.",
+    prompt_too_large:"This conversation got too long to send. Reload the page to start a fresh channel.",
+    upstream_error:"The connection to Claude dropped mid-answer. Say it again when you're ready."
+  };
+
+  function handle(text){
+    if (!text) return;
+    addTurn("you", text);
+    S.turns.push({ role:"user", content:text });
+    counts();
+    saveSession();
+
+    if (!S.sample){
+      addTurn("system", "No Claude capability in this view, so there's nobody to answer. Your words are still going into the transcript and the relay.");
+      return;
+    }
+
+    shutUp();
+    abortAsk();
+    setState("thinking");
+    S.askedAt = Date.now();
+
+    var el = addTurn("claude", "…");
+    var spoken = 0, buffer = "", firstAt = 0;
+    var ctl = new AbortController();
+    S.ctl = ctl;
+
+    // Speak each finished sentence as it arrives — that is what keeps the
+    // line feeling live instead of waiting for the whole answer.
+    function flushSentences(all){
+      var chunk = all.slice(spoken);
+      var m, re = /[^.!?…]+[.!?…]+["')\]]*\s*/g;
+      var last = 0;
+      while ((m = re.exec(chunk)) !== null) last = m.index + m[0].length;
+      if (last > 0){
+        speak(chunk.slice(0, last));
+        spoken += last;
+      }
+    }
+
+    S.sample(
+      [{ role:"user", content:BRIEF }].concat(trimTurns()),
+      {
+        modelTier:"quick",
+        cache:false,
+        signal:ctl.signal,
+        onText:function(u){
+          if (!firstAt){ firstAt = Date.now(); $("k-rt").textContent = (firstAt - S.askedAt) + " ms"; }
+          el.textContent = u.text;
+          buffer = u.text;
+          log.scrollTop = log.scrollHeight;
+          flushSentences(u.text);
+        }
+      }
+    ).then(function(res){
+      el.textContent = res.text;
+      var tail = res.text.slice(spoken).trim();
+      if (tail) speak(tail);
+      spoken = res.text.length;
+      S.turns.push({ role:"assistant", content:res.text });
+      counts(); saveSession();
+      lamp("brain", "ok", (Date.now() - S.askedAt) + " ms");
+      if (res.truncated) addTurn("system", "That answer hit the length limit and stops mid-thought.");
+      if (!S.speaking && !S.speakQ.length) setState(S.wantMic ? "listening" : "idle");
+    }).catch(function(e){
+      var code = (e && e.code) || "upstream_error";
+      if (code === "cancelled"){
+        if (buffer) el.textContent = buffer; else el.parentElement.parentElement.remove();
+        setState(S.wantMic ? "listening" : "idle");
+        return;
+      }
+      if (e && e.text) el.textContent = e.text;
+      else el.parentElement.parentElement.remove();
+      addTurn("system", ERRCOPY[code] || ERRCOPY.upstream_error);
+      lamp("brain", code === "rate_limited" ? "warn" : "hot", code);
+      setState(S.wantMic ? "listening" : "idle");
+    }).then(function(){ if (S.ctl === ctl) S.ctl = null; });
+  }
+
+  /* ---------------- relay: db ---------------- */
+
+  function saveSession(){
+    if (!S.db) return;
+    var turns = S.turns.slice(-60).map(function(t){
+      return { role:t.role, text:String(t.content).slice(0, 4000) };
+    });
+    try {
+      S.db.doc("sessions/" + S.sessionId).set({
+        sessionId:S.sessionId,
+        startedAt:S.startedAt,
+        lastAt:new Date().toISOString(),
+        turnCount:S.turns.length,
+        turns:turns
+      }).catch(function(){ lamp("relay","warn","write failed"); });
+    } catch(e){}
+  }
+
+  function pushStatus(){
+    if (!S.db) return;
+    var payload = S.state + "|" + S.turns.length;
+    if (payload === S.lastStatus) return;
+    S.lastStatus = payload;
+    if (S.statusTimer) return;
+    S.statusTimer = setTimeout(function(){
+      S.statusTimer = null;
+      try {
+        S.db.doc("relay/status").set({
+          sessionId:S.sessionId,
+          state:S.state,
+          turnCount:S.turns.length,
+          micOpen:!!S.wantMic,
+          updatedAt:new Date().toISOString()
+        }).catch(function(){});
+      } catch(e){}
+    }, 1200);
+  }
+
+  function watchRelay(){
+    if (!S.db) return;
+    S.db.doc("relay/outbound").onSnapshot(function(snap){
+      var d = snap.exists ? snap.data() : null;
+      var msgs = (d && Array.isArray(d.messages)) ? d.messages : [];
+      var fresh = msgs.filter(function(m){ return m && m.id && !S.relaySeen[m.id]; });
+
+      if (!S.relayBooted){
+        // Don't replay a backlog written before this page opened.
+        msgs.forEach(function(m){ if (m && m.id) S.relaySeen[m.id] = 1; });
+        S.relayBooted = true;
+        $("relaynote").textContent = msgs.length
+          ? "Relay live. " + msgs.length + " earlier message(s) skipped."
+          : "Relay live. Nothing queued.";
+        lamp("relay", "ok", "live");
+        return;
+      }
+
+      if (!fresh.length) return;
+      fresh.forEach(function(m){ S.relaySeen[m.id] = 1; });
+
+      // Write outside the snapshot callback.
+      setTimeout(function(){
+        fresh.forEach(function(m){
+          var body = String(m.text || "").trim();
+          if (!body) return;
+          addTurn("relay", body);
+          S.turns.push({ role:"assistant", content:"(relayed from Michael's Claude Code session) " + body });
+          speak(body);
+        });
+        counts();
+        $("relaynote").textContent = "Last relay " + clock() + ".";
+        try {
+          S.db.doc("relay/status").update({
+            lastSpokenId:fresh[fresh.length - 1].id,
+            lastSpokenAt:new Date().toISOString()
+          }).catch(function(){});
+        } catch(e){}
+      }, 0);
+    }, function(err){
+      lamp("relay", "hot", (err && err.code) || "error");
+      $("relaynote").textContent = "Relay stopped: " + ((err && err.code) || "error") + ".";
+    });
+  }
+
+  /* ---------------- controls ---------------- */
+
+  function setMicBtn(){
+    var b = $("mic");
+    b.setAttribute("data-on", S.wantMic ? "1" : "0");
+    $("mictx").textContent = S.wantMic ? "Close line"
+                           : (S.mode === "ptt" ? "Hold to talk" : "Open line");
+  }
+
+  function openLine(){
+    if (!SR) return;
+    S.wantMic = true; setMicBtn(); setState("listening"); startRec();
+  }
+  function closeLine(){
+    S.wantMic = false; setMicBtn(); stopRec(); shutUp(); abortAsk(); setState("idle");
+    lamp("stt", "off", "closed");
+  }
+
+  var micBtn = $("mic");
+
+  micBtn.addEventListener("click", function(){
+    if (S.mode === "ptt") return;         // ptt is handled by pointer events
+    if (S.wantMic) closeLine(); else openLine();
+  });
+
+  // Push-to-talk
+  micBtn.addEventListener("pointerdown", function(ev){
+    if (S.mode !== "ptt") return;
+    ev.preventDefault();
+    try { micBtn.setPointerCapture(ev.pointerId); } catch(e){}
+    shutUp(); openLine();
+  });
+  ["pointerup","pointercancel","pointerleave"].forEach(function(t){
+    micBtn.addEventListener(t, function(){
+      if (S.mode !== "ptt" || !S.wantMic) return;
+      closeLine();
+    });
+  });
+
+  function segment(aId, bId, onPick){
+    var a = $(aId), b = $(bId);
+    function pick(which){
+      a.setAttribute("aria-pressed", which === "a" ? "true" : "false");
+      b.setAttribute("aria-pressed", which === "b" ? "true" : "false");
+      onPick(which);
+    }
+    a.addEventListener("click", function(){ pick("a"); });
+    b.addEventListener("click", function(){ pick("b"); });
+  }
+
+  segment("m-free","m-ptt", function(w){
+    S.mode = w === "a" ? "free" : "ptt";
+    if (S.mode === "ptt" && S.wantMic) closeLine();
+    setMicBtn();
+  });
+  segment("d-half","d-full", function(w){
+    S.duplex = w === "a" ? "half" : "full";
+  });
+
+  $("lang").addEventListener("change", function(){
+    if (S.rec){ stopRec(); S.rec = null; }
+    if (S.wantMic) setTimeout(startRec, 200);
+  });
+
+  $("sayform").addEventListener("submit", function(ev){
+    ev.preventDefault();
+    var v = $("sayin").value.trim();
+    if (!v) return;
+    $("sayin").value = "";
+    handle(v);
+  });
+
+  /* ---------------- boot ---------------- */
+
+  S.startedAt = new Date().toISOString();
+
+  addTurn("system",
+    "Talkback is a voice line to Claude. Open the line and speak — what you say is transcribed here, " +
+    "answered by Claude, and read back to you aloud. Everything said on this channel is written to the " +
+    "relay, where Michael's Claude Code session can read it and post messages back into this line.");
+
+  if (!SR){
+    addTurn("system",
+      "This browser has no speech recognition, so the microphone button is off. Chrome, Edge and Safari have it; " +
+      "Firefox does not. You can still type below and hear the replies read aloud.");
+    micBtn.disabled = true;
+  } else {
+    micBtn.disabled = false;
+  }
+
+  setMicBtn();
+  counts();
+
+  if (window.claude && typeof window.claude.use === "function"){
+    window.claude.use("sample").then(function(s){
+      S.sample = s || null;
+      if (s) lamp("brain", "ok", "ready");
+      else { lamp("brain", "hot", "unavailable");
+             addTurn("system","Claude isn't reachable from this view, so nothing will answer. The transcript and relay still work."); }
+    }).catch(function(){ lamp("brain","hot","unavailable"); });
+
+    window.claude.use("db").then(function(d){
+      S.db = d || null;
+      if (d){ lamp("relay","ok","connecting"); saveSession(); watchRelay(); }
+      else { lamp("relay","hot","unavailable"); $("relaynote").textContent = "Relay unavailable in this view."; }
+    }).catch(function(){ lamp("relay","hot","unavailable"); });
+  } else {
+    lamp("brain","hot","no host");
+    lamp("relay","hot","no host");
+    addTurn("system","This page is open outside a Claude viewer, so Claude and the relay are both unavailable. Open it from your artifact list.");
+  }
+})();
+</script>
