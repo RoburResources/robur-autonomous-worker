@@ -34,6 +34,15 @@ the viewer grants it:
 
 ## Signal path
 
+## Interface
+
+The page is a voice surface, not a dashboard: one audio-reactive orb as the hero,
+a large live caption, and a single call control. The orb is driven by real signal
+— mic RMS off an `AnalyserNode` while listening, and `SpeechSynthesisUtterance`
+`onboundary` word events while speaking — not a decorative loop. Diagnostics and
+voice/language settings live in a settings sheet; the transcript is a slide-over
+panel with an unread badge.
+
 | Stage | Mechanism | Notes |
 |---|---|---|
 | Speech in | Web Speech API `SpeechRecognition` | Chrome, Edge, Safari. Firefox has none — the page falls back to a text field. |
@@ -80,6 +89,16 @@ Read the live conversation from a Claude Code session with the Artifact tool:
 action: read_db   db_op: list   collection: sessions
 action: write_db  db_op: update collection: relay  doc_id: outbound
 ```
+
+## Two traps worth knowing
+
+- `SVGElement` does not reflect the `hidden` IDL property (it is defined on
+  `HTMLElement`). `svg.hidden = true` silently sets a JS expando and the
+  `[hidden]` CSS rule never matches, so icon swaps must use
+  `setAttribute("hidden", "")` / `removeAttribute("hidden")`.
+- `DocumentReference.update()` rejects `invalid_argument` when the document does
+  not exist yet. `relay/status` is therefore written with a single `set` of the
+  whole body, so `lastSpokenId` is not silently dropped on a fresh channel.
 
 ## Operating notes
 
