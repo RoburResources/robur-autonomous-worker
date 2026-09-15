@@ -90,7 +90,13 @@ action: read_db   db_op: list   collection: sessions
 action: write_db  db_op: update collection: relay  doc_id: outbound
 ```
 
-## Two traps worth knowing
+## Three traps worth knowing
+
+- `sample` reads consecutive same-role turns as ONE turn. A leading `user`
+  instructions turn therefore merges with the viewer's first `user` message,
+  and the model answers the instructions instead of the person — then denies
+  on the next turn that they ever said anything. The brief must end with an
+  explicit end-of-instructions boundary.
 
 - `SVGElement` does not reflect the `hidden` IDL property (it is defined on
   `HTMLElement`). `svg.hidden = true` silently sets a JS expando and the
@@ -99,6 +105,18 @@ action: write_db  db_op: update collection: relay  doc_id: outbound
 - `DocumentReference.update()` rejects `invalid_argument` when the document does
   not exist yet. `relay/status` is therefore written with a single `set` of the
   whole body, so `lastSpokenId` is not silently dropped on a fresh channel.
+
+## When the microphone will not open
+
+`getUserMedia` inside an artifact frame can fail before the browser ever asks
+the viewer, because a cross-origin frame only gets the microphone if the
+embedder delegates it via `allow="microphone"`. The page distinguishes that
+case from an ordinary permission denial (`document.featurePolicy
+.allowsFeature("microphone")` plus the `DOMException.name`), says which one it
+hit, and writes `micError` / `micFramed` / `micPolicy` onto `relay/status` so
+the reason is readable from a Claude Code session without the viewer having to
+describe it. If the embedder is the blocker, browser speech cannot run here at
+all and the voice side has to be hosted outside artifacts.
 
 ## Operating notes
 
